@@ -76,7 +76,7 @@ export default function ClientDashboardPage() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["client-jobs"],
     queryFn: () => jobsApi.list({ limit: 5 }),
-    enabled: !!user,
+    enabled: !!user?.is_approved,
   });
 
   const jobs = data?.jobs ?? [];
@@ -145,6 +145,15 @@ export default function ClientDashboardPage() {
           Post a job
         </button>
       </div>
+
+      {!user?.is_approved && (
+        <div className="bg-canvas rounded-lg border border-hairline p-5">
+          <p className="text-title-sm text-ink">Account pending approval</p>
+          <p className="text-body-sm text-muted mt-1">
+            Complete KYC and wait for approval to access jobs and wallet data.
+          </p>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -8,7 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { authApi } from "@/lib/api/auth";
-import { useAuthStore } from "@/lib/stores/authStore";
+import { useAuthStore, useIsHydrated } from "@/lib/stores/authStore";
 import { extractApiError } from "@/lib/api/axios";
 import type { UserRole } from "@/types";
 
@@ -27,9 +27,18 @@ const ROLE_REDIRECT: Record<UserRole, string> = {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setUser } = useAuthStore();
+  const { setUser, user, isAuthenticated } = useAuthStore();
+  const isHydrated = useIsHydrated();
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  // ── Redirect authenticated users away from login ───────────────────────
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (isAuthenticated && user?.role) {
+      router.replace(ROLE_REDIRECT[user.role]);
+    }
+  }, [isAuthenticated, isHydrated, router, user?.role]);
 
   const {
     register,
@@ -96,10 +105,13 @@ export default function LoginPage() {
               autoComplete="email"
               placeholder="you@example.com"
               className="text-input"
+              suppressHydrationWarning
               {...register("email")}
             />
             {errors.email && (
-              <p className="text-xs text-error mt-0.5">{errors.email.message}</p>
+              <p className="text-xs text-error mt-0.5">
+                {errors.email.message}
+              </p>
             )}
           </div>
 
@@ -126,6 +138,7 @@ export default function LoginPage() {
                 autoComplete="current-password"
                 placeholder="••••••••"
                 className="text-input pr-10"
+                suppressHydrationWarning
                 {...register("password")}
               />
               <button

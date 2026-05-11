@@ -8,24 +8,28 @@ const requestLogger = require('./middleware/requestLogger');
 const { globalRateLimiter } = require('./middleware/rateLimiter');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const { initSSESubscriber } = require('./middleware/sse');
+const { startPublishWorker } = require('./modules/social/queue/publish.worker');
 
-const healthRouter        = require('./modules/health/health.routes');
-const authRouter          = require('./modules/auth/auth.routes');
-const profileRouter       = require('./modules/profile/profile.routes');
-const kycRouter           = require('./modules/kyc/kyc.routes');
-const adminRouter         = require('./modules/admin/admin.routes');
-const categoryRouter      = require('./modules/categories/category.routes');
-const jobRouter           = require('./modules/jobs/job.routes');
-const proposalRouter      = require('./modules/proposals/proposal.routes');
-const matchingRouter      = require('./modules/matching/matching.routes');
-const negotiationRouter   = require('./modules/negotiation/negotiation.routes');
-const notificationRouter  = require('./modules/notifications/notification.routes');
-const walletRouter        = require('./modules/wallet/wallet.routes');
-const paymentRouter       = require('./modules/payments/payment.routes');
-const chatRouter          = require('./modules/chat/chat.routes');
-const whatsappRouter      = require('./modules/whatsapp/webhook.routes');
+const healthRouter       = require('./modules/health/health.routes');
+const authRouter         = require('./modules/auth/auth.routes');
+const profileRouter      = require('./modules/profile/profile.routes');
+const kycRouter          = require('./modules/kyc/kyc.routes');
+const adminRouter        = require('./modules/admin/admin.routes');
+const categoryRouter     = require('./modules/categories/category.routes');
+const jobRouter          = require('./modules/jobs/job.routes');
+const proposalRouter     = require('./modules/proposals/proposal.routes');
+const matchingRouter     = require('./modules/matching/matching.routes');
+const negotiationRouter  = require('./modules/negotiation/negotiation.routes');
+const notificationRouter = require('./modules/notifications/notification.routes');
+const walletRouter       = require('./modules/wallet/wallet.routes');
+const paymentRouter      = require('./modules/payments/payment.routes');
+const chatRouter         = require('./modules/chat/chat.routes');
+const whatsappRouter     = require('./modules/whatsapp/webhook.routes');
+const socialRouter       = require('./modules/social/social.routes');
 
+// Initialise background services
 initSSESubscriber();
+startPublishWorker();
 
 const app = express();
 
@@ -44,8 +48,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
 }));
 
-// ── Raw body routes BEFORE express.json() ─────────────────────────────────────
-// Both Razorpay and WhatsApp webhooks need the raw body for signature verification
+// ── Raw body routes BEFORE express.json() ────────────────────────────────────
 app.use(`/api/${env.apiVersion}/payments`,  paymentRouter);
 app.use(`/api/${env.apiVersion}/whatsapp`,  whatsappRouter);
 
@@ -69,6 +72,7 @@ app.use(`/api/${env.apiVersion}/negotiations`,  negotiationRouter);
 app.use(`/api/${env.apiVersion}/notifications`, notificationRouter);
 app.use(`/api/${env.apiVersion}/wallet`,        walletRouter);
 app.use(`/api/${env.apiVersion}/chat`,          chatRouter);
+app.use(`/api/${env.apiVersion}/social`,        socialRouter);
 
 app.use(notFound);
 app.use(errorHandler);

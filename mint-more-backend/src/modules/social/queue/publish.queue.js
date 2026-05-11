@@ -1,0 +1,59 @@
+const { Queue } = require('bullmq');
+const { getRedis } = require('../../../config/redis');
+
+let publishQueue = null;
+
+const getPublishQueue = () => {
+  if (!publishQueue) {
+    publishQueue = new Queue('social-publish', {
+      connection: getRedis(),
+      defaultJobOptions: {
+        attempts:    3,
+        backoff: {
+          type:  'exponential',
+          delay: 10000,   // 10s, 20s, 40s
+        },
+        removeOnComplete: { count: 100 },
+        removeOnFail:     { count: 200 },
+      },
+    });
+  }
+  return publishQueue;
+};
+
+/**
+ * Schedule a post for publishing.
+ * If publish_at is in the past or null → publish immediately.
+ * If publish_at is in the future → BullMQ delays the job.
+ */
+const schedulePost = async (postId, publishAt = null) => {
+  const queue = getPublishQueue();
+
+  const delay = publishAt
+    ? Math.max(0, new Date(publishAt).getTime() - Date.now())
+    : 0;
+
+  const job = await queue.add(
+    'publish-post',
+    { postId },
+    { delay }
+  );
+
+  return job.id;
+};
+
+/**
+ * Cancel a scheduled post (remove from queue).
+ */
+const cancelScheduledPost = async (queueJobId) => {
+  const queue = getPublishQueue();
+  try {
+    const job = await queue.getJob(queueJobId);
+    if (job) await job.remove();
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+
+module.exports = { getPublishQueue, schedulePost, cancelScheduledPost };

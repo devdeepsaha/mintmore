@@ -10,6 +10,8 @@
 **Mint More** is a production-level controlled matchmaking + negotiation SaaS platform.
 **NOT** an open bidding marketplace — uses structured negotiation with admin oversight.
 Freelancers only see jobs they were matched to by the engine.
+Clients interact via web app OR WhatsApp. Freelancers use web app only.
+Clients connect their own social accounts (Facebook/Instagram/YouTube) and publish content directly from Mint More.
 
 ### Core Modules
 | # | Module | Status |
@@ -25,9 +27,9 @@ Freelancers only see jobs they were matched to by the engine.
 | 4D | Negotiation + Assignment Loop | ✅ Complete |
 | 4E | Auto Matching + Visibility Control | ✅ Complete |
 | 5 | In-App Notification System (SSE + Redis) | ✅ Complete |
-| 6 | Wallet + Escrow Payment System | 🔲 Not Started |
-| 7 | Real-time Chat System | 🔲 Not Started |
-| 8 | Social Media Integration + Publishing System | 🔲 Not Started |
+| 6 | Wallet + Escrow Payment System (Razorpay) | ✅ Complete |
+| 7 | WhatsApp-Bridged Chat System | ✅ Complete |
+| 8 | Social Media Integration + Publishing System | ✅ Complete |
 | 9 | AI Tools Integration | 🔲 Not Started |
 
 ---
@@ -41,21 +43,27 @@ Freelancers only see jobs they were matched to by the engine.
 - **Cache / Queue:** Redis + BullMQ
 - **File Storage:** Supabase Storage
 - **Real-time:** Server-Sent Events (SSE) + Redis pub/sub
+- **Payments:** Razorpay
+- **Messaging:** Meta WhatsApp Cloud API
+- **Social Publishing:** Facebook Graph API v19, Instagram Graph API, YouTube Data API v3
 
 ### Integrations (Planned)
-- **Payments:** Razorpay
-- **Social Media:** Facebook Graph API, YouTube Data API v3, Instagram Graph API
 - **AI Models:** OpenRouter / Replicate
 
 ### Key Libraries
 | Package | Purpose |
 |---------|---------|
 | `pg` | PostgreSQL pool |
-| `ioredis` | Redis client + SSE pub/sub subscriber |
-| `jsonwebtoken` | JWT access + refresh tokens |
+| `ioredis` | Redis client + SSE pub/sub |
+| `jsonwebtoken` | JWT tokens |
 | `bcrypt` | Password hashing |
 | `multer` | File upload (memory storage) |
 | `@supabase/supabase-js` | Supabase Storage client |
+| `razorpay` | Payment gateway SDK |
+| `bullmq` | Job queue (scheduled publishing + AI jobs) |
+| `@googleapis/youtube` | YouTube Data API v3 |
+| `axios` | HTTP client for Meta/Google APIs |
+| `form-data` | Multipart form data for media uploads |
 | `helmet` | Security headers |
 | `cors` | CORS |
 | `compression` | Gzip responses |
@@ -75,7 +83,7 @@ PORT=5000
 API_VERSION=v1
 
 # ── DATABASE (Supabase Session Pooler — IPv4) ────────
-# CRITICAL: Always use Session Pooler host — NOT db.xxxxx.supabase.co (IPv6)
+# CRITICAL: Always use Session Pooler — NOT db.xxxxx.supabase.co (IPv6)
 DB_HOST=aws-1-ap-south-1.pooler.supabase.com
 DB_PORT=5432
 DB_NAME=postgres
@@ -111,69 +119,79 @@ SUPABASE_SERVICE_KEY=your_service_role_key
 MAX_FILE_SIZE_MB=5
 ALLOWED_FILE_TYPES=image/jpeg,image/png,image/webp,application/pdf
 
-# ── PAYMENTS (Phase 6) ────────────────────────────────
-# RAZORPAY_KEY_ID=
-# RAZORPAY_KEY_SECRET=
-# RAZORPAY_WEBHOOK_SECRET=
+# ── RAZORPAY ─────────────────────────────────────────
+RAZORPAY_KEY_ID=rzp_test_your_key_id
+RAZORPAY_KEY_SECRET=your_razorpay_key_secret
+RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
 
-# ── SOCIAL MEDIA (Phase 8) ────────────────────────────
-# FACEBOOK_APP_ID=
-# FACEBOOK_APP_SECRET=
-# INSTAGRAM_APP_ID=
-# INSTAGRAM_APP_SECRET=
-# YOUTUBE_CLIENT_ID=
-# YOUTUBE_CLIENT_SECRET=
-# YOUTUBE_REDIRECT_URI=
+# ── WHATSAPP (Meta Cloud API) ─────────────────────────
+META_WA_ACCESS_TOKEN=your_permanent_system_user_token
+META_WA_VERIFY_TOKEN=mintmore1
+META_WA_API_VERSION=v19.0
+META_APP_SECRET=your_meta_app_secret
+
+# ── FACEBOOK / INSTAGRAM ─────────────────────────────
+# Waiting for Meta Business Verification (applied — in review)
+FACEBOOK_APP_ID=your_facebook_app_id
+FACEBOOK_APP_SECRET=your_facebook_app_secret
+FACEBOOK_REDIRECT_URI=http://localhost:5000/api/v1/social/callback/facebook
+
+# ── YOUTUBE (Google OAuth) ────────────────────────────
+# Setup complete — awaiting Client ID + Secret from Google Cloud Console
+YOUTUBE_CLIENT_ID=your_google_oauth_client_id
+YOUTUBE_CLIENT_SECRET=your_google_oauth_client_secret
+YOUTUBE_REDIRECT_URI=http://localhost:5000/api/v1/social/callback/youtube
+
+# ── FRONTEND URL ──────────────────────────────────────
+FRONTEND_URL=http://localhost:3000
 
 # ── AI (Phase 9) ─────────────────────────────────────
 # OPENROUTER_API_KEY=
 # REPLICATE_API_TOKEN=
 ```
 
-> 🔑 Generate JWT secrets:
-> ```bash
-> node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-> ```
-
 ---
 
 ## 🗄️ Database
 
 ### Connection Policy (CRITICAL)
-> ⚠️ This project runs on an **IPv4-only network**.
-> Always use the **Session Pooler** host — NEVER `db.xxxxx.supabase.co` (IPv6).
+> ⚠️ IPv4-only network — always use Session Pooler host.
+> NEVER use `db.xxxxx.supabase.co` (IPv6).
 
 ```
-Host:     aws-1-ap-south-1.pooler.supabase.com
-Port:     5432
-User:     postgres.grnnqilqrzlnrtbfrpyx
-SSL:      { rejectUnauthorized: false }
+Host:  aws-1-ap-south-1.pooler.supabase.com
+Port:  5432
+User:  postgres.grnnqilqrzlnrtbfrpyx
+SSL:   { rejectUnauthorized: false }
 ```
 
 ### Supabase Project Info
 - **Org:** mintmoremarketing's Org
 - **Project:** Mint-more-saas
-- **Branch:** main (PRODUCTION)
 - **Email:** agency@mintmoremarketing.com
 
-### Migrations Run
+### Migrations
 | File | Description | Status |
 |------|-------------|--------|
 | `001_create_users.sql` | Users table, enums, indexes, trigger | ✅ Done |
-| `002_create_kyc.sql` | KYC submissions table, alter users | ✅ Done |
-| `003_marketplace_foundation.sql` | Jobs, proposals, assignments, categories, enums, user fields | ✅ Done |
-| `004_jobs_metadata.sql` | Add `metadata JSONB` to jobs | ✅ Done |
-| `005_pricing_system.sql` | `category_price_ranges` table, `pricing_mode` enum, freelancer price fields, seeded ranges | ✅ Done |
-| `006_active_jobs_count.sql` | Add `active_jobs_count` to users, backfill, non-negative constraint | ✅ Done |
-| `007_negotiation_system.sql` | `negotiations`, `negotiation_rounds`, `job_matched_candidates`, job locking fields, new job_status enum values | ✅ Done |
-| `008_notifications.sql` | `notifications` table, `notification_type` enum (15 types), indexes | ✅ Done |
+| `002_create_kyc.sql` | KYC submissions table | ✅ Done |
+| `003_marketplace_foundation.sql` | Jobs, proposals, assignments, categories | ✅ Done |
+| `004_jobs_metadata.sql` | metadata JSONB on jobs | ✅ Done |
+| `005_pricing_system.sql` | category_price_ranges, pricing_mode, freelancer price fields | ✅ Done |
+| `006_active_jobs_count.sql` | active_jobs_count on users | ✅ Done |
+| `007_negotiation_system.sql` | negotiations, rounds, matched_candidates, locking fields | ✅ Done |
+| `008_notifications.sql` | notifications table, 15 notification types | ✅ Done |
+| `009_wallet_system.sql` | wallets, transactions, escrow, withdrawals, razorpay_orders | ✅ Done |
+| `010_chat_system.sql` | whatsapp_numbers, chat_rooms, messages, user_presence | ✅ Done |
+| `011_wa_sessions.sql` | wa_sessions state machine table | ✅ Done |
+| `012_social_media.sql` | social_accounts, social_posts, post_media, post_platforms | ✅ Done |
 
 ### Supabase Storage Buckets
 | Bucket | Public | Purpose |
 |--------|--------|---------|
 | `avatars` | ✅ Yes | User profile pictures |
-| `kyc-docs` | ❌ No | KYC identity documents (private) |
-| `job-attachments` | ✅ Yes | Job brief files, reference docs |
+| `kyc-docs` | ❌ No | KYC documents (private) |
+| `job-attachments` | ✅ Yes | Job brief files |
 
 ---
 
@@ -183,86 +201,61 @@ SSL:      { rejectUnauthorized: false }
 mint-more-backend/
 ├── src/
 │   ├── config/
-│   │   ├── env.js                              ✅ Central env config
-│   │   ├── database.js                         ✅ PostgreSQL pool (Session Pooler)
-│   │   ├── redis.js                            ✅ Redis client (ioredis)
-│   │   └── supabase.js                         ✅ Supabase Storage client
-│   ├── db/
-│   │   └── migrations/
-│   │       ├── 001_create_users.sql            ✅
-│   │       ├── 002_create_kyc.sql              ✅
-│   │       ├── 003_marketplace_foundation.sql  ✅
-│   │       ├── 004_jobs_metadata.sql           ✅
-│   │       ├── 005_pricing_system.sql          ✅
-│   │       ├── 006_active_jobs_count.sql       ✅
-│   │       ├── 007_negotiation_system.sql      ✅
-│   │       └── 008_notifications.sql           ✅
+│   │   ├── env.js                              ✅
+│   │   ├── database.js                         ✅
+│   │   ├── redis.js                            ✅
+│   │   └── supabase.js                         ✅
+│   ├── db/migrations/
+│   │   ├── 001–011 (previous)                  ✅
+│   │   └── 012_social_media.sql                ✅
 │   ├── middleware/
-│   │   ├── authenticate.js                     ✅ JWT auth + authorize() factory
-│   │   ├── errorHandler.js                     ✅ 404 + global error handler
-│   │   ├── rateLimiter.js                      ✅ Global rate limiter
-│   │   ├── requestLogger.js                    ✅ Morgan → Winston
-│   │   ├── requireApproved.js                  ✅ Platform approval gate
-│   │   ├── upload.js                           ✅ Multer (memoryStorage)
-│   │   └── sse.js                              ✅ SSE connection handler + Redis subscriber
+│   │   ├── authenticate.js                     ✅
+│   │   ├── errorHandler.js                     ✅
+│   │   ├── rateLimiter.js                      ✅
+│   │   ├── requestLogger.js                    ✅
+│   │   ├── requireApproved.js                  ✅
+│   │   ├── upload.js                           ✅
+│   │   ├── sse.js                              ✅ notifications + chat channels
+│   │   └── rawBody.js                          ✅ Razorpay + WhatsApp webhooks
 │   ├── modules/
-│   │   ├── health/
-│   │   │   ├── health.routes.js                ✅
-│   │   │   ├── health.controller.js            ✅
-│   │   │   └── health.service.js               ✅
-│   │   ├── auth/
-│   │   │   ├── auth.routes.js                  ✅
-│   │   │   ├── auth.controller.js              ✅
-│   │   │   ├── auth.service.js                 ✅
-│   │   │   └── auth.validator.js               ✅
-│   │   ├── profile/
-│   │   │   ├── profile.routes.js               ✅
-│   │   │   ├── profile.controller.js           ✅
-│   │   │   ├── profile.service.js              ✅
-│   │   │   └── profile.validator.js            ✅
-│   │   ├── kyc/
-│   │   │   ├── kyc.routes.js                   ✅
-│   │   │   ├── kyc.controller.js               ✅
-│   │   │   ├── kyc.service.js                  ✅ notifyKycReviewed trigger wired
-│   │   │   └── kyc.validator.js                ✅
-│   │   ├── admin/
-│   │   │   ├── admin.routes.js                 ✅ calls jobController.adminListAllJobs
-│   │   │   ├── admin.controller.js             ✅
-│   │   │   ├── admin.service.js                ✅
-│   │   │   └── admin.validator.js              ✅
-│   │   ├── categories/
-│   │   │   ├── category.routes.js              ✅
-│   │   │   └── category.controller.js          ✅
-│   │   ├── jobs/
-│   │   │   ├── job.routes.js                   ✅
-│   │   │   ├── job.controller.js               ✅
-│   │   │   ├── job.service.js                  ✅ auto-match + visibility control
-│   │   │   └── job.validator.js                ✅
-│   │   ├── proposals/
-│   │   │   ├── proposal.routes.js              ✅
-│   │   │   ├── proposal.controller.js          ✅
-│   │   │   ├── proposal.service.js             ✅
-│   │   │   └── proposal.validator.js           ✅
-│   │   ├── matching/
-│   │   │   ├── matching.routes.js              ✅
-│   │   │   ├── matching.controller.js          ✅
-│   │   │   ├── matching.service.js             ✅ notifyMatchedCandidates trigger wired
-│   │   │   └── pricing.service.js              ✅
-│   │   ├── negotiation/
-│   │   │   ├── negotiation.routes.js           ✅
-│   │   │   ├── negotiation.controller.js       ✅
-│   │   │   └── negotiation.service.js          ✅ all negotiation triggers wired
-│   │   └── notifications/
-│   │       ├── notification.routes.js          ✅
-│   │       ├── notification.controller.js      ✅
-│   │       ├── notification.service.js         ✅ create, bulk, read, mark, broadcast
-│   │       └── notification.triggers.js        ✅ all trigger functions
-│   └── app.js                                  ✅ all routers registered + initSSESubscriber
-├── .env                                        ✅ (never commit)
-├── .env.example                                ✅
-├── .gitignore                                  ✅
-├── package.json                                ✅
-└── server.js                                   ✅
+│   │   ├── health/                             ✅
+│   │   ├── auth/                               ✅
+│   │   ├── profile/                            ✅
+│   │   ├── kyc/                                ✅
+│   │   ├── admin/                              ✅
+│   │   ├── categories/                         ✅
+│   │   ├── jobs/                               ✅
+│   │   ├── proposals/                          ✅
+│   │   ├── matching/                           ✅
+│   │   ├── negotiation/                        ✅
+│   │   ├── notifications/                      ✅
+│   │   ├── wallet/                             ✅
+│   │   ├── payments/                           ✅
+│   │   ├── chat/
+│   │   │   ├── chat.routes.js                  ✅
+│   │   │   ├── chat.controller.js              ✅
+│   │   │   ├── chat.service.js                 ✅
+│   │   │   └── whatsapp.service.js             ✅
+│   │   ├── whatsapp/
+│   │   │   ├── webhook.routes.js               ✅
+│   │   │   ├── webhook.controller.js           ✅
+│   │   │   └── conversation.service.js         ✅ full state machine
+│   │   └── social/
+│   │       ├── social.routes.js                ✅
+│   │       ├── social.controller.js            ✅
+│   │       ├── social.service.js               ✅ OAuth + publishing + analytics
+│   │       ├── social.validator.js             ✅
+│   │       ├── publishers/
+│   │       │   ├── facebook.publisher.js       ✅
+│   │       │   ├── instagram.publisher.js      ✅
+│   │       │   └── youtube.publisher.js        ✅
+│   │       └── queue/
+│   │           ├── publish.queue.js            ✅ BullMQ queue
+│   │           └── publish.worker.js           ✅ BullMQ worker
+│   └── app.js                                  ✅ all routers + workers started
+├── .env
+├── package.json
+└── server.js
 ```
 
 ---
@@ -279,7 +272,7 @@ mint-more-backend/
 #### Auth
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| POST | `/auth/register` | None | Register (role: client/freelancer) |
+| POST | `/auth/register` | None | Register |
 | POST | `/auth/login` | None | Login → tokens |
 | POST | `/auth/refresh` | None | Rotate tokens |
 | POST | `/auth/logout` | ✅ Bearer | Blacklist token |
@@ -289,7 +282,7 @@ mint-more-backend/
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/profile/me` | ✅ Bearer | Full profile |
-| PATCH | `/profile/me` | ✅ Bearer | Update profile + price fields |
+| PATCH | `/profile/me` | ✅ Bearer | Update profile |
 | PATCH | `/profile/me/avatar` | ✅ Bearer | Upload avatar |
 | GET | `/profile/me/pricing-guidance` | ✅ Freelancer | Market pricing hints |
 | GET | `/profile/:userId` | ✅ Bearer | Public profile |
@@ -297,219 +290,356 @@ mint-more-backend/
 #### KYC
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| GET | `/kyc/status` | ✅ Bearer | KYC status + submissions |
+| GET | `/kyc/status` | ✅ Bearer | KYC status |
 | POST | `/kyc/basic` | ✅ Bearer | Submit basic KYC |
-| POST | `/kyc/identity` | ✅ Bearer | Submit identity KYC (multipart) |
-| POST | `/kyc/address` | ✅ Bearer | Submit address KYC (multipart) |
-| GET | `/kyc/admin/pending` | ✅ Admin | List pending submissions |
+| POST | `/kyc/identity` | ✅ Bearer | Submit identity KYC |
+| POST | `/kyc/address` | ✅ Bearer | Submit address KYC |
+| GET | `/kyc/admin/pending` | ✅ Admin | Pending queue |
 | PATCH | `/kyc/admin/review/:id` | ✅ Admin | Approve / reject |
 
 #### Admin
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/admin/dashboard` | ✅ Admin | Platform stats |
-| GET | `/admin/users` | ✅ Admin | List users (filter/search/paginate) |
-| GET | `/admin/users/:userId` | ✅ Admin | User detail |
-| PATCH | `/admin/users/:userId/approval` | ✅ Admin | Approve / suspend user |
-| PATCH | `/admin/users/:userId/level` | ✅ Admin | Set freelancer level |
-| GET | `/admin/categories` | ✅ Admin | All categories (incl. inactive) |
+| GET | `/admin/users` | ✅ Admin | List users |
+| GET | `/admin/users/:id` | ✅ Admin | User detail |
+| PATCH | `/admin/users/:id/approval` | ✅ Admin | Approve / suspend |
+| PATCH | `/admin/users/:id/level` | ✅ Admin | Set freelancer level |
+| GET | `/admin/categories` | ✅ Admin | All categories |
 | POST | `/admin/categories` | ✅ Admin | Create category |
-| PATCH | `/admin/categories/:categoryId/toggle` | ✅ Admin | Toggle active state |
-| GET | `/admin/jobs` | ✅ Admin | All jobs (calls `adminListAllJobs`) |
-| PATCH | `/admin/jobs/:jobId/status` | ✅ Admin | Update job status |
-| GET | `/admin/price-ranges` | ✅ Admin | All category price ranges |
+| PATCH | `/admin/categories/:id/toggle` | ✅ Admin | Toggle active |
+| GET | `/admin/jobs` | ✅ Admin | All jobs |
+| PATCH | `/admin/jobs/:id/status` | ✅ Admin | Update status |
+| GET | `/admin/price-ranges` | ✅ Admin | Price ranges |
 | PUT | `/admin/price-ranges/:categoryId` | ✅ Admin | Upsert price range |
 
-#### Categories (Public)
+#### Categories
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/categories` | None | Active categories |
-| GET | `/categories/:id/market-range` | None | Market price range for category |
+| GET | `/categories/:id/market-range` | None | Market price range |
 
 #### Jobs
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| POST | `/jobs` | ✅ Client + Approved | Create job as `open` — matching auto-triggers |
-| POST | `/jobs/draft` | ✅ Client + Approved | Create job as `draft` |
-| PATCH | `/jobs/:id/publish` | ✅ Client + Approved | Publish draft → matching auto-triggers |
+| POST | `/jobs` | ✅ Client + Approved | Create → matching auto-triggers |
+| POST | `/jobs/draft` | ✅ Client + Approved | Create draft |
+| PATCH | `/jobs/:id/publish` | ✅ Client + Approved | Publish → matching triggers |
 | PATCH | `/jobs/:id` | ✅ Client + Approved | Update draft |
 | PATCH | `/jobs/:id/cancel` | ✅ Approved | Cancel job |
-| GET | `/jobs/my/summary` | ✅ Client | Job status counts |
+| GET | `/jobs/my/summary` | ✅ Client | Status counts |
 | GET | `/jobs` | ✅ Approved | Role-filtered list |
-| GET | `/jobs/:id` | ✅ Approved | Role-gated single job |
-| GET | `/jobs/admin/all` | ✅ Admin | All jobs unfiltered |
+| GET | `/jobs/:id` | ✅ Approved | Single job |
+| GET | `/jobs/admin/all` | ✅ Admin | All jobs |
 | PATCH | `/jobs/admin/:id/status` | ✅ Admin | Update status |
 
 #### Proposals
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| POST | `/proposals/jobs/:jobId` | ✅ Freelancer + Approved | Submit proposal |
-| DELETE | `/proposals/:id` | ✅ Freelancer | Withdraw proposal |
+| POST | `/proposals/jobs/:jobId` | ✅ Freelancer | Submit proposal |
+| DELETE | `/proposals/:id` | ✅ Freelancer | Withdraw |
 | GET | `/proposals/my` | ✅ Freelancer | Own proposals |
-| GET | `/proposals/jobs/:jobId/client` | ✅ Client | Shortlisted proposals |
-| GET | `/proposals/jobs/:jobId/admin` | ✅ Admin | All proposals for job |
+| GET | `/proposals/jobs/:jobId/client` | ✅ Client | Shortlisted |
+| GET | `/proposals/jobs/:jobId/admin` | ✅ Admin | All proposals |
 | PATCH | `/proposals/:id/review` | ✅ Admin | Shortlist / reject |
 
 #### Matching
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | POST | `/matching/jobs/:jobId/run` | ✅ Admin | Manual re-run |
-| GET | `/matching/jobs/:jobId/preview` | ✅ Admin | Preview without persisting |
-| GET | `/matching/jobs/:jobId/pool` | ✅ Admin | Full scored freelancer pool |
+| GET | `/matching/jobs/:jobId/preview` | ✅ Admin | Preview |
+| GET | `/matching/jobs/:jobId/pool` | ✅ Admin | Full pool |
 
 #### Negotiations
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| POST | `/negotiations/jobs/:jobId/initiate` | ✅ Freelancer | Open negotiation — locks job |
-| PATCH | `/negotiations/jobs/:jobId/freelancer-respond` | ✅ Freelancer | Counter / accept / reject |
-| PATCH | `/negotiations/jobs/:jobId/client-respond` | ✅ Client | Counter / accept / reject |
-| PATCH | `/negotiations/jobs/:jobId/assignment-respond` | ✅ Freelancer | Accept / decline assignment |
-| GET | `/negotiations/jobs/:jobId/status` | ✅ Any | View negotiation state |
-| GET | `/negotiations/admin/pending-approvals` | ✅ Admin | Jobs awaiting deal approval |
-| POST | `/negotiations/admin/jobs/:jobId/approve-deal` | ✅ Admin | Approve deal → assignment |
-| POST | `/negotiations/admin/jobs/:jobId/reject-deal` | ✅ Admin | Reject deal → fallback |
+| POST | `/negotiations/jobs/:jobId/initiate` | ✅ Freelancer | Lock + open negotiation |
+| PATCH | `/negotiations/jobs/:jobId/freelancer-respond` | ✅ Freelancer | Counter/accept/reject |
+| PATCH | `/negotiations/jobs/:jobId/client-respond` | ✅ Client | Counter/accept/reject |
+| PATCH | `/negotiations/jobs/:jobId/assignment-respond` | ✅ Freelancer | Accept/decline |
+| GET | `/negotiations/jobs/:jobId/status` | ✅ Any | State |
+| GET | `/negotiations/admin/pending-approvals` | ✅ Admin | Pending deals |
+| POST | `/negotiations/admin/jobs/:jobId/approve-deal` | ✅ Admin | Approve |
+| POST | `/negotiations/admin/jobs/:jobId/reject-deal` | ✅ Admin | Reject |
 
 #### Notifications
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| GET | `/notifications/stream` | ✅ `?token=` | SSE real-time stream |
-| GET | `/notifications` | ✅ Bearer | Paginated list (`?unread_only=true` supported) |
+| GET | `/notifications/stream` | ✅ `?token=` | SSE stream |
+| GET | `/notifications` | ✅ Bearer | Paginated list |
 | GET | `/notifications/unread-count` | ✅ Bearer | Badge count |
-| PATCH | `/notifications/read-all` | ✅ Bearer | Mark all as read |
-| PATCH | `/notifications/:id/read` | ✅ Bearer | Mark one as read |
-| POST | `/notifications/admin/broadcast` | ✅ Admin | Broadcast to all or by role |
+| PATCH | `/notifications/read-all` | ✅ Bearer | Mark all read |
+| PATCH | `/notifications/:id/read` | ✅ Bearer | Mark one read |
+| POST | `/notifications/admin/broadcast` | ✅ Admin | Broadcast |
+
+#### Wallet
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | `/wallet` | ✅ Bearer | Balance + transactions |
+| GET | `/wallet/transactions` | ✅ Bearer | History |
+| POST | `/wallet/withdraw` | ✅ Freelancer | Request withdrawal |
+| GET | `/wallet/admin/stats` | ✅ Admin | Platform overview |
+| GET | `/wallet/admin/withdrawals` | ✅ Admin | Pending withdrawals |
+| PATCH | `/wallet/admin/withdrawals/:id` | ✅ Admin | Approve/reject |
+| POST | `/wallet/admin/jobs/:jobId/complete` | ✅ Admin | Complete → release escrow |
+| POST | `/wallet/admin/jobs/:jobId/cancel` | ✅ Admin | Cancel → refund escrow |
+| POST | `/wallet/admin/users/:userId/adjust` | ✅ Admin | Manual adjustment |
+
+#### Payments
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| POST | `/payments/topup/order` | ✅ Bearer | Create Razorpay order |
+| POST | `/payments/topup/verify` | ✅ Bearer | Verify payment |
+| POST | `/payments/webhook/razorpay` | None (sig) | Razorpay webhook |
+
+#### Chat
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | `/chat/rooms` | ✅ Bearer | My rooms |
+| GET | `/chat/rooms/:id` | ✅ Bearer | Room detail |
+| GET | `/chat/rooms/:id/messages` | ✅ Bearer | Messages |
+| POST | `/chat/rooms/:id/messages` | ✅ Bearer | Send (bridges to WA) |
+| POST | `/chat/presence/online` | ✅ Bearer | Mark online |
+| POST | `/chat/presence/offline` | ✅ Bearer | Mark offline |
+| GET | `/chat/presence/:userId` | ✅ Bearer | Check presence |
+| GET | `/chat/admin/wa-numbers` | ✅ Admin | MM WA numbers |
+| POST | `/chat/admin/wa-numbers` | ✅ Admin | Add/update number |
+
+#### WhatsApp Webhook
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | `/whatsapp/webhook` | None | Meta verification |
+| POST | `/whatsapp/webhook` | None (sig) | Incoming events |
+| POST | `/whatsapp/test/simulate-message` | None (dev) | Local testing |
+
+#### Social Media
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | `/social/connect/:platform` | `?token=` | Start OAuth flow |
+| GET | `/social/callback/:platform` | None | OAuth callback |
+| GET | `/social/accounts` | ✅ Bearer | Connected accounts |
+| DELETE | `/social/accounts/:id` | ✅ Bearer | Disconnect account |
+| GET | `/social/posts` | ✅ Bearer | List posts |
+| POST | `/social/posts` | ✅ Approved | Create draft post |
+| GET | `/social/posts/:id` | ✅ Bearer | Post detail |
+| POST | `/social/posts/:id/media` | ✅ Approved | Add media |
+| POST | `/social/posts/:id/publish` | ✅ Approved | Publish/schedule |
+| POST | `/social/posts/:id/cancel` | ✅ Bearer | Cancel post |
+| GET | `/social/posts/:id/analytics` | ✅ Bearer | Pull analytics |
 
 ---
 
-## 🚀 Full Product Flow
+## 📱 Social Media System (Phase 8)
+
+### How It Works
+Each client connects their own social accounts with one click. Mint More stores their OAuth tokens and publishes on their behalf.
 
 ```
-1. Client posts job
-   POST /jobs → status: 'open'
-   → matching engine runs automatically (setImmediate — non-blocking)
-   → job_matched_candidates populated
-       rank 1  → position = 'primary'   → jobs.active_freelancer_id
-       rank 2  → position = 'backup'    → jobs.backup_freelancer_id
-       rank 3+ → position = 'candidate'
-   → job status → 'matching'
-   → all matched freelancers receive in-app notification (job_matched) via SSE
+Client clicks "Connect Facebook/Instagram"
+        ↓
+GET /api/v1/social/connect/facebook?token=JWT
+        ↓
+Backend redirects to Facebook OAuth
+        ↓
+Client logs in with their OWN Facebook account
+        ↓
+Facebook redirects back to callback
+        ↓
+Backend saves client's tokens in social_accounts table
+(linked to their user_id — completely isolated from other clients)
+        ↓
+Client can now publish to their own accounts from Mint More
+```
 
-   Alt: POST /jobs/draft → PATCH /jobs/:id/publish
-   → same auto-match trigger fires on publish
+### Platform Requirements
+| Platform | Client Needs |
+|----------|-------------|
+| Facebook | Facebook account + at least one Page they manage |
+| Instagram | Instagram Business/Creator account connected to their FB Page |
+| YouTube | Google account with a YouTube channel |
 
-2. Freelancer visibility (controlled marketplace)
-   GET /jobs        → ONLY jobs in job_matched_candidates for that freelancer
-   GET /jobs/:id    → 404 if freelancer not matched (no info leak)
+> ⚠️ Personal Instagram accounts do NOT work — must be Business or Creator. This is Meta's restriction.
 
-3. Tiered notification delivery (in-app SSE only — NOT WhatsApp / email)
-   notify_at stored per candidate in job_matched_candidates
-   Tier 1 (0 jobs completed):   notify immediately
-   Tier 2 (1–5 jobs completed): notify +5 min
-   Tier 3 (>5 jobs completed):  notify +10 min
+### Content Types Supported
+| Type | Facebook | Instagram | YouTube |
+|------|----------|-----------|---------|
+| Text post | ✅ | ❌ | ❌ |
+| Single image | ✅ | ✅ | ❌ |
+| Single video | ✅ | ✅ | ✅ |
+| Carousel | ✅ | ✅ | ❌ |
+| Reel | ❌ | ✅ | ❌ |
+| Short | ❌ | ❌ | ✅ |
 
-4. Primary freelancer initiates negotiation
-   POST /negotiations/jobs/:jobId/initiate
-   → job status → 'locked'
-   → active_freelancer_id confirmed
-   → backup + other candidates blocked (403)
-   → client receives negotiation_initiated notification
+### Publishing Flow
+```
+Client creates draft post → adds media → clicks Publish
+        ↓
+POST /social/posts/:id/publish
+        ↓
+Backend creates per-platform status rows
+        ↓
+BullMQ job enqueued (immediate or delayed for scheduled)
+        ↓
+Worker picks up job → publishes to all platforms in parallel
+(Promise.allSettled — one failure doesn't block others)
+        ↓
+Per-platform status updated (published / failed)
+        ↓
+Overall post status: published / failed
+```
 
-5. Negotiation loop (max 2 rounds)
-   → freelancer proposes / client counters
-   → each action fires negotiation_countered notification to the other party
-   → on agree: job → 'pending_admin_approval'
-   → all admins receive deal_pending_admin notification
+### Scheduling
+```
+POST /social/posts { publish_at: "2026-05-15T18:30:00Z" }
+→ status = 'scheduled'
+→ BullMQ delay = publish_at - now
+→ Worker fires exactly at publish_at
+→ Can cancel any time before firing
+```
 
-6. Fallback (on any reject / fail)
-   → backup exists:  promote backup → primary, lock, re-negotiate
-                     both parties receive negotiation_rejected notification
-   → no backup:      job → 'matching' (auto re-run triggered)
+### Token Management
+- Facebook tokens last 60 days — auto-refreshed 7 days before expiry
+- YouTube tokens (Google OAuth) — refreshed via refresh_token automatically
+- Tokens stored per-user in `social_accounts` table
+- Completely isolated — each client's tokens are independent
 
-7. Admin approves deal
-   POST /negotiations/admin/jobs/:jobId/approve-deal
-   → negotiation status → 'admin_approved'
-   → job_assignment created (status: 'pending_acceptance')
-   → job → 'assigned'
-   → active_jobs_count++ for freelancer
-   → freelancer receives deal_approved + assignment_created notifications
-   → client receives deal_approved notification
+### External Setup Status
+| Service | Status |
+|---------|--------|
+| Meta Business Verification | ⏳ In Review (applied — 2 business days) |
+| Facebook App permissions | ⏳ Pending (after business verification) |
+| Google Cloud Project | ✅ Created |
+| YouTube Data API v3 | ✅ Enabled |
+| YouTube OAuth consent screen | ✅ Configured |
+| YouTube OAuth client ID | ✅ Created — add to .env |
+| YouTube test users | ✅ Add agency@mintmoremarketing.com |
 
-8. Freelancer accepts assignment
-   PATCH /negotiations/jobs/:jobId/assignment-respond { action: "accept" }
-   → assignment status → 'accepted'
-   → job → 'in_progress'
-   → client + all admins receive assignment_accepted notification
+### After Meta Business Verification
+1. App → Add Product → Facebook Login
+2. Add redirect URI: `http://localhost:5000/api/v1/social/callback/facebook`
+3. App Review → Request permissions:
+   - `pages_show_list`
+   - `pages_manage_posts`
+   - `instagram_content_publish`
+   - `instagram_manage_insights`
 
-9. Freelancer declines assignment
-   → active_jobs_count-- (reverted)
-   → fallback triggered again
-   → client + all admins receive assignment_declined notification
+---
+
+## 🟢 WhatsApp System (Phase 7)
+
+### Architecture
+```
+Client messages MM Main Number
+        ↓
+State machine (conversation.service.js):
+  new_contact → welcome menu
+  awaiting_service → validate 1-6
+  awaiting_brief → collect project brief
+  transferring → generate MMSTART-XXXX token → send wa.me link
+        ↓
+Client taps link → messages MM Category Number
+        ↓
+  awaiting_activation → validate token → activate
+                      → create job + trigger matching
+  active_job_chat → route to chat room ↔ freelancer web app
+  job_completed → redirect to main
+```
+
+### State Machine Rules
+| State | Valid Input | Response |
+|-------|-------------|----------|
+| `new_contact` | Anything | Welcome menu |
+| `awaiting_service` | 1–6 | Brief prompt |
+| `awaiting_service` | Anything else | Re-send menu |
+| `awaiting_brief` | Text ≥5 chars | Transfer link + token |
+| `transferring` | RESTART | Reset to menu |
+| `transferring` | Anything else | "Use the link we sent" |
+| `awaiting_activation` | `MMSTART-XXXX` | Activate chat room |
+| `awaiting_activation` | Anything else | Redirect to main |
+| `active_job_chat` | Any message | Route to freelancer |
+| `job_completed` | Any message | "Start new project at main" |
+
+### WhatsApp Numbers
+| Number | category_id | Status |
+|--------|-------------|--------|
+| Meta test `+1 415 523 8886` | NULL (main) | ✅ Seeded — Phone ID: `1092380853958380` |
+| MM Videography | video-editing UUID | ⏳ Need fresh SIM |
+| MM Design | graphic-design UUID | ⏳ Need fresh SIM |
+| MM Content | content-writing UUID | ⏳ Need fresh SIM |
+
+### Meta App Status
+| Item | Status |
+|------|--------|
+| App created + published | ✅ |
+| System user token | ✅ |
+| App secret configured | ✅ |
+| Webhook verified + messages subscribed | ✅ |
+| Signature verification working | ✅ |
+| Test number seeded in DB | ✅ |
+| Business verification | ⏳ In Review |
+| Real SIM numbers | ⏳ Need 2 fresh SIMs |
+
+---
+
+## 💰 Wallet System (Phase 6)
+
+### Transaction Types
+| Type | Direction | Trigger |
+|------|-----------|---------|
+| `topup` | +balance | Razorpay payment.captured webhook |
+| `escrow_hold` | -balance +escrow | Admin approves deal |
+| `escrow_release` | -escrow +freelancer | Job completed |
+| `escrow_refund` | -escrow +client | Job cancelled |
+| `withdrawal` | -balance | Freelancer requests payout |
+| `withdrawal_rejected` | +balance | Admin rejects withdrawal |
+| `adjustment` | ±balance | Admin manual (testing/corrections) |
+
+### Escrow Flow
+```
+Client balance ──(hold on deal approval)──→ Client escrow_balance
+                                                    │
+                                      Job complete  │  Job cancelled
+                                                    ▼       ▼
+                                         Freelancer     Client
+                                          balance       balance
+```
+
+### Admin Manual Adjustment
+```bash
+POST /api/v1/wallet/admin/users/:userId/adjust
+{ "amount": 10000, "note": "Test credit for development" }
 ```
 
 ---
 
 ## 🔔 Notification System (Phase 5)
 
-### Architecture
-```
-Service / trigger function
-        ↓
-notification.triggers.js → createNotification() / createBulkNotifications()
-        ↓  (DB INSERT into notifications table)
-notifications table (PostgreSQL)
-        ↓  (Redis PUBLISH to 'mint_more:notifications')
-Redis pub/sub channel
-        ↓  (SSE subscriber in sse.js receives message)
-activeConnections Map<userId, Set<Response>>
-        ↓  (writes SSE event to all open tabs for that user)
-Browser / App  ←  data: { notification JSON }
-```
-
-### Notification Types
-| Type | Trigger | Recipient(s) |
-|------|---------|--------------|
-| `job_matched` | Matching engine | Matched freelancers |
-| `negotiation_initiated` | Freelancer initiates | Client |
-| `negotiation_countered` | Either party counters | Other party |
-| `negotiation_accepted` | Either party accepts | Both parties |
-| `negotiation_rejected` | Either party rejects | Both parties |
+### 15 Notification Types
+| Type | Trigger | Recipient |
+|------|---------|-----------|
+| `job_matched` | Matching runs | Matched freelancers |
+| `negotiation_initiated` | Freelancer opens | Client |
+| `negotiation_countered` | Either counters | Other party |
+| `negotiation_accepted` | Either accepts | Both |
+| `negotiation_rejected` | Either rejects | Both |
 | `deal_pending_admin` | Deal agreed | All admins |
 | `deal_approved` | Admin approves | Freelancer + Client |
 | `deal_rejected_by_admin` | Admin rejects | Freelancer + Client |
-| `assignment_created` | Admin approves deal | Freelancer |
-| `assignment_accepted` | Freelancer accepts | Client + All admins |
-| `assignment_declined` | Freelancer declines | Client + All admins |
+| `assignment_created` | Admin approves | Freelancer |
+| `assignment_accepted` | Freelancer accepts | Client + Admins |
+| `assignment_declined` | Freelancer declines | Client + Admins |
 | `kyc_approved` | Admin approves KYC | User |
 | `kyc_rejected` | Admin rejects KYC | User |
-| `admin_broadcast` | Admin sends broadcast | All users or role group |
+| `admin_broadcast` | Admin sends | All / by role |
 | `system` | System events | Any user |
 
 ### SSE Protocol
 ```
-Client connects:
-GET /api/v1/notifications/stream?token=ACCESS_TOKEN
-
-Server sets headers:
-Content-Type: text/event-stream
-Cache-Control: no-cache
-Connection: keep-alive
-X-Accel-Buffering: no
-
-Events pushed:
-data: {"id":"uuid","type":"job_matched","title":"...","body":"...","data":{...}}
-
-Keepalive every 30s:
-: ping
+Connect: GET /notifications/stream?token=ACCESS_TOKEN
+Events:  data: {"type":"notification","payload":{...}}
+         data: {"type":"chat_message","roomId":"...","message":{...}}
+Ping:    : ping  (every 30s)
 ```
-
-### Key Rules
-- All trigger calls use `setImmediate` — post-commit, non-blocking
-- Notification failures **never** affect business logic
-- Browser `EventSource` cannot set headers — token passed as `?token=` query param
-- One user can have multiple SSE connections (multiple tabs) — all receive simultaneously
-- `activeConnections` Map lives in memory — browsers auto-reconnect on server restart (standard SSE behaviour)
-- `unread_only=true` query param available on `GET /notifications`
-- `role` param on broadcast: `'client'`, `'freelancer'`, `'admin'`, or omit for all
 
 ---
 
@@ -517,200 +647,249 @@ Keepalive every 30s:
 
 ### Pipeline
 ```
-SQL: SELECT * FROM users WHERE role = 'freelancer'
-   (no other SQL filters — all logic in JS)
+SQL: WHERE role = 'freelancer' (only filter)
+              ↓ JS application layer
+checkEligibility():
+  is_available + is_approved + is_active
+  active_jobs_count < 5
+  expert mode → experienced level only
               ↓
-checkEligibility() — JS application layer:
-  is_available = true
-  is_approved  = true
-  is_active    = true
-  active_jobs_count < MAX_ACTIVE_JOBS (5)
-  expert mode job → experienced level only
-              ↓
-evaluatePricingAlignment() — JS application layer:
+evaluatePricingAlignment():
   budget mode: experienced excluded if price > intermediate_max × 1.15
   expert mode: non-experienced excluded
               ↓
 computeScore():
   base = skill(0.40) + level(0.25) + rating(0.20) + fairness(0.15)
   × workload_multiplier
-  + new_freelancer_boost (+0.10 if 0 jobs completed)
-  + idle_bonus           (+0.00 to +0.15)
-  + kyc_bonus            (+0.05 if verified)
-  + profile_bonus        (+0.05 max)
-  + pricing_contribution (0.15 max)
-  + competitive_boost    (+0.05 if applicable)
-  clamped to [0, 1]
+  + new_freelancer_boost (+0.10)
+  + idle_bonus (+0.00–0.15)
+  + kyc_bonus (+0.05)
+  + profile_bonus (+0.05)
+  + pricing_contribution (max 0.15)
+  clamped [0, 1]
               ↓
-assignTier() → sort by score DESC → top 10
+rank → tier → top 10 → saveMatchedCandidates()
               ↓
-saveMatchedCandidates():
-  rank 1  → position = 'primary'   → jobs.active_freelancer_id
-  rank 2  → position = 'backup'    → jobs.backup_freelancer_id
-  rank 3+ → position = 'candidate'
-              ↓
-notifyMatchedCandidates() — fire-and-forget via setImmediate
-              ↓
-job status → 'matching'
+notifyMatchedCandidates() via setImmediate
 ```
-
-### Auto-Trigger
-| Trigger | Method | How |
-|---------|--------|-----|
-| Job created as `open` | `createJob` | `setImmediate(() => runMatchingForJob(id))` |
-| Draft published | `publishJob` | `setImmediate(() => runMatchingForJob(id))` |
-| Admin manual override | `POST /matching/jobs/:id/run` | Direct synchronous call |
 
 ### Scoring Constants
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `MAX_ACTIVE_JOBS` | 5 | Hard eligibility disqualifier |
-| `MAX_JOBS_REFERENCE` | 10 | Fairness score denominator |
-| `NEW_FREELANCER_BOOST` | +0.10 | Boost for 0 completed jobs |
-| `TOP_N_CANDIDATES` | 10 | Max candidates persisted per job |
-| `MAX_ROUNDS` | 2 | Hard negotiation round cap |
-| `COMPETITIVE_TOLERANCE` | 15% | Grace zone above intermediate_max |
-| `PRICING_SCORE_MAX_CONTRIBUTION` | 0.15 | Max pricing score weight |
+| `MAX_ACTIVE_JOBS` | 5 | Hard disqualifier |
+| `MAX_JOBS_REFERENCE` | 10 | Fairness denominator |
+| `NEW_FREELANCER_BOOST` | +0.10 | 0 jobs done |
+| `TOP_N_CANDIDATES` | 10 | Max per job |
+| `MAX_ROUNDS` | 2 | Negotiation cap |
 
 ### active_jobs_count Lifecycle
 | Event | Change |
 |-------|--------|
 | Admin approves deal | +1 |
 | Freelancer declines assignment | -1 |
-| Job completed | -1 (Phase 6) |
-| Job cancelled while assigned | -1 (Phase 6) |
+| Job completed | -1 |
+| Job cancelled while assigned | -1 |
 
 ---
 
 ## 👁️ Job Visibility Rules
 
-| Role | `GET /jobs` | `GET /jobs/:id` |
-|------|-------------|-----------------|
-| admin | All jobs, all statuses | Any job |
-| client | Own jobs only | Own job only → 404 otherwise |
-| freelancer | Only jobs in `job_matched_candidates` | Only if matched → **404** otherwise |
+| Role | GET /jobs | GET /jobs/:id |
+|------|-----------|---------------|
+| admin | All jobs | Any job |
+| client | Own jobs only | Own job → 404 otherwise |
+| freelancer | Only matched jobs | Only if matched → 404 |
 
-> ⚠️ Freelancer access returns **404** (not 403) — a 403 would reveal the job exists.
+> 404 not 403 — prevents information leakage about job existence.
 
 ---
 
-## 🗄️ Database Schema (Current)
+## 🗄️ Database Schema (All Tables)
 
-### `users`
+### users
 ```sql
 id, email, phone, password_hash, role,
 full_name, avatar_url, bio, skills, gender, date_of_birth,
 address_city, address_state, country,
 is_active, is_approved, approved_at, approved_by,
-is_email_verified,
-kyc_status, kyc_level,
-freelancer_level, level_set_by_admin,
-is_available,
-jobs_completed_count,   -- historical total (fairness scoring)
-active_jobs_count,      -- current workload (eligibility filter)
-average_rating,
+is_email_verified, kyc_status, kyc_level,
+freelancer_level, level_set_by_admin, is_available,
+jobs_completed_count, active_jobs_count, average_rating,
 price_min, price_max, pricing_visibility,
-refresh_token, last_login_at,
-created_at, updated_at
+whatsapp_number, wa_verified,
+refresh_token, last_login_at, created_at, updated_at
 ```
 
-### `jobs`
+### jobs
 ```sql
 id, client_id, category_id,
 title, description, requirements, attachments,
-budget_type, budget_amount, currency,
-pricing_mode,           -- 'budget' | 'expert'
-required_level, required_skills,
-deadline, metadata,
-status,                 -- draft|open|matching|locked|pending_admin_approval
-                        -- |assigned|in_progress|completed|cancelled
-matched_at, match_method,
-active_freelancer_id,   -- rank 1 from matching
-backup_freelancer_id,   -- rank 2 from matching
-locked_at,
-negotiation_rounds,
+budget_type, budget_amount, currency, pricing_mode,
+required_level, required_skills, deadline, metadata,
+status, matched_at, match_method,
+active_freelancer_id, backup_freelancer_id,
+locked_at, negotiation_rounds,
 deal_approved_by, deal_approved_at,
 admin_note, assigned_by, assigned_at,
 created_at, updated_at
 ```
 
-### `job_matched_candidates`
+### wallets
 ```sql
-id, job_id, freelancer_id,
-rank,        -- 1 = primary, 2 = backup, 3+ = candidate
-score,
-tier,        -- 'tier_1_new' | 'tier_2_low' | 'tier_3_experienced'
-notify_at,   -- when to deliver notification
-notified_at,
-position,    -- 'primary' | 'backup' | 'candidate'
-created_at
-UNIQUE(job_id, freelancer_id)
+id, user_id (UNIQUE), balance, escrow_balance, currency
+CONSTRAINT: balance >= 0, escrow_balance >= 0
+Auto-created via trigger for every new user
 ```
 
-### `negotiations`
+### transactions (immutable ledger — INSERT only)
+```sql
+id, wallet_id, user_id, type, status,
+amount, currency, balance_after, escrow_after,
+reference_id, reference_type,
+description, metadata, created_at
+```
+
+### escrow_records
+```sql
+id, job_id (UNIQUE), client_id, freelancer_id,
+amount, currency, status (held|released|refunded|disputed),
+held_at, released_at, refunded_at,
+hold_tx_id, release_tx_id, refund_tx_id,
+admin_note, created_at, updated_at
+```
+
+### withdrawals
+```sql
+id, user_id, wallet_id, amount, currency,
+status (pending|approved|rejected|paid),
+account_name, account_number, ifsc_code, upi_id,
+admin_note, reviewed_by, reviewed_at, paid_at,
+transaction_id, created_at, updated_at
+```
+
+### razorpay_orders
+```sql
+id, user_id, wallet_id,
+razorpay_order_id (UNIQUE), razorpay_payment_id, razorpay_signature,
+amount, amount_paise, currency,
+status (created|paid|failed|refunded),
+webhook_verified, metadata, created_at, updated_at
+```
+
+### whatsapp_numbers
+```sql
+id, category_id (NULL = main number),
+display_name, phone_number, waba_phone_id (UNIQUE),
+is_active, created_at, updated_at
+```
+
+### chat_rooms
+```sql
+id, job_id (UNIQUE), client_id, freelancer_id,
+client_wa_number, mm_wa_number_id, whatsapp_thread_id,
+is_active, last_message_at, last_message_preview,
+created_at, updated_at
+```
+
+### messages
+```sql
+id, room_id, sender_id, sender_role (client|freelancer|system),
+content, channel (web|whatsapp),
+wa_message_id, wa_status,
+attachment_url, attachment_type,
+read_by_client, read_by_freelancer,
+read_at_client, read_at_freelancer,
+is_deleted, created_at
+```
+
+### wa_sessions
+```sql
+id, client_wa_number, mm_phone_id,
+session_type (main|category), state (wa_session_state enum),
+selected_service, project_brief,
+category_id, job_id,
+handoff_token (UNIQUE), handoff_expires_at, handoff_used,
+user_id, last_message_at, created_at, updated_at
+UNIQUE(client_wa_number, mm_phone_id)
+```
+
+### social_accounts
+```sql
+id, user_id, platform (facebook|instagram|youtube),
+platform_user_id, platform_username, platform_name, platform_avatar_url,
+page_id, page_name, instagram_account_id,
+access_token, refresh_token, token_expires_at, token_scope,
+is_active, last_used_at, last_error,
+created_at, updated_at
+UNIQUE(user_id, platform, platform_user_id)
+```
+
+### social_posts
+```sql
+id, user_id,
+title, caption, hashtags[], mentions[],
+content_type (text|image|video|carousel|reel|short|story),
+status (draft|scheduled|publishing|published|failed|cancelled),
+publish_at, published_at,
+target_platforms social_platform[],
+queue_job_id, source_job_id,
+metadata, created_at, updated_at
+```
+
+### social_post_media
+```sql
+id, post_id, user_id,
+media_url, media_type, mime_type,
+file_size_bytes, duration_seconds, width, height,
+thumbnail_url, alt_text, sort_order,
+created_at
+```
+
+### social_post_platforms
+```sql
+id, post_id, social_account_id, platform,
+status (pending|publishing|published|failed|skipped),
+platform_post_id, platform_post_url,
+platform_title, platform_description, privacy_status,
+error_message, retry_count, last_retry_at,
+views_count, likes_count, comments_count, shares_count, reach_count,
+analytics_pulled_at, published_at,
+created_at, updated_at
+UNIQUE(post_id, platform)
+```
+
+### notifications
+```sql
+id, user_id, type (15 types),
+title, body, entity_type, entity_id,
+data (JSONB), is_read, read_at, created_at
+```
+
+### negotiations
 ```sql
 id, job_id, freelancer_id, client_id,
-status,         -- pending|active|agreed|failed|admin_approved|cancelled
-current_round,
-max_rounds,     -- always 2
+status, current_round, max_rounds (2),
 agreed_price, agreed_days,
 admin_note, approved_by, approved_at,
 created_at, updated_at
 UNIQUE(job_id, freelancer_id)
 ```
 
-### `negotiation_rounds`
+### job_matched_candidates
 ```sql
-id, negotiation_id, job_id,
-round_number,
-sender,         -- 'freelancer' | 'client'
-proposed_price, proposed_days, message,
+id, job_id, freelancer_id,
+rank, score, tier, notify_at, notified_at,
+position (primary|backup|candidate),
 created_at
+UNIQUE(job_id, freelancer_id)
 ```
 
-### `job_assignments`
+### job_assignments
 ```sql
 id, job_id, freelancer_id, assigned_by, proposal_id,
-status,         -- pending_acceptance|accepted|declined|completed|cancelled
-freelancer_note, responded_at, started_at, completed_at,
-admin_note,
-created_at, updated_at
-```
-
-### `notifications`
-```sql
-id, user_id,
-type,           -- notification_type enum (15 types)
-title,          -- short title for notification bell
-body,           -- full message text
-entity_type,    -- 'job' | 'negotiation' | 'kyc' | 'assignment' | null
-entity_id,      -- UUID of related entity | null
-data,           -- JSONB free-form payload (deep links, amounts, etc.)
-is_read,
-read_at,
-created_at
-```
-
-### `category_price_ranges`
-```sql
-id, category_id (UNIQUE),
-beginner_min, beginner_max,
-intermediate_min, intermediate_max,
-experienced_min, experienced_max,
-currency, notes,
-created_by, updated_by,
-created_at, updated_at
-```
-
-### `kyc_submissions`
-```sql
-id, user_id, level, status,
-date_of_birth, gender, nationality,
-document_type, document_number,
-document_front_url, document_back_url, selfie_url,
-address_line1, address_line2, city, state, pincode, country,
-address_proof_url,
-admin_note, reviewed_by, reviewed_at,
+status, freelancer_note,
+responded_at, started_at, completed_at, completed_at_confirmed,
+completion_note, admin_note,
 created_at, updated_at
 ```
 
@@ -718,34 +897,36 @@ created_at, updated_at
 
 ## 🔧 Bug Fixes Log
 
-### Phase 4E — PostgreSQL FOR UPDATE + LEFT JOIN
-**Problem:** `ERROR: FOR UPDATE cannot be applied to the nullable side of an outer join`
-**Fix:** Never use `FOR UPDATE` with `LEFT JOIN`. Lock the target row only.
+### Phase 4E — FOR UPDATE + LEFT JOIN
 ```js
-// CORRECT
-const result = await client.query(
-  `SELECT * FROM jobs WHERE id = $1 FOR UPDATE`, [jobId]
-);
+// CORRECT — no joins with FOR UPDATE
+await client.query(`SELECT * FROM jobs WHERE id = $1 FOR UPDATE`, [jobId]);
 ```
 
-### Phase 4E — admin.routes.js Function Name Mismatch
-**Problem:** `Route.get() requires a callback function but got [object Undefined]`
-**Fix:** Function is exported as `adminListAllJobs` not `adminListJobs`.
+### Phase 4E — admin.routes.js
 ```js
-// CORRECT
+// CORRECT function name
 router.get('/jobs', jobController.adminListAllJobs);
+```
+
+### Phase 7 — rawBody Buffer
+```js
+// CORRECT — Buffer not string concat
+let data = Buffer.alloc(0);
+req.on('data', (chunk) => { data = Buffer.concat([data, chunk]); });
+req.on('end', () => { req.rawBody = data.toString('utf8'); next(); });
 ```
 
 ---
 
-## 🔐 Auth System Design
+## 🔐 Auth System
 
-- **Access Token:** JWT, 15 min expiry, signed with `JWT_ACCESS_SECRET`
-- **Refresh Token:** JWT, 7 day expiry, stored in DB, rotated on every use
-- **Logout:** Access token blacklisted in Redis (TTL: 20 min), refresh cleared from DB
-- **RBAC:** `authenticate` middleware + `authorize('admin'|'freelancer'|'client')` factory
-- **Platform Gate:** `requireApproved` middleware — blocks unapproved users from marketplace
-- **Token Payload:** `{ sub, email, role, iat, exp }`
+- Access Token: JWT 15min — `JWT_ACCESS_SECRET`
+- Refresh Token: JWT 7d — stored in DB, rotated on every use
+- Logout: Redis blacklist (20min) + DB refresh cleared
+- RBAC: `authenticate` + `authorize('admin'|'freelancer'|'client')`
+- Platform Gate: `requireApproved`
+- Token Payload: `{ sub, email, role, iat, exp }`
 
 ---
 
@@ -753,148 +934,41 @@ router.get('/jobs', jobController.adminListAllJobs);
 
 | Decision | Reason |
 |----------|--------|
-| Session Pooler (IPv4) | Network only supports IPv4 — direct Supabase host uses IPv6 |
-| `pg.Pool` (no ORM) | Full SQL control, complex queries, transparent debugging |
-| SQL fetches only `role = 'freelancer'` in matching | All filtering in JS — transparent, debuggable, never returns empty |
-| `active_jobs_count` separate from `jobs_completed_count` | Workload = current eligibility; fairness = historical |
-| `pricing_mode` on job | Cleaner client intent than relying solely on `required_level` |
-| Pricing exclusion in JS, not SQL | Admin sees exactly why each candidate was excluded |
-| `ineligible[]` always returned from matching | Debugging + admin transparency |
-| `setImmediate` for auto-matching + notifications | Non-blocking — HTTP response returns instantly |
-| Lazy `require` for matching in job.service | Breaks circular dependency: `job → matching → negotiation` |
-| Freelancer job access returns 404 not 403 | 403 leaks job existence — 404 is safer |
-| `FOR UPDATE` on `jobs` row only (no JOIN) | PostgreSQL hard-errors on `FOR UPDATE` with nullable LEFT JOIN |
-| `active_jobs_count` incremented at admin approval | Admin can still reject after agreement — count only locks at assignment |
-| `GREATEST(0, active_jobs_count - 1)` on decrement | Protects against negative values |
-| SSE over WebSocket for notifications | Unidirectional, HTTP/1.1 compatible, no extra library needed for push |
-| Redis pub/sub as SSE broadcast layer | Decouples notification creation from active connections — works across multiple server instances |
-| Dedicated Redis subscriber instance in sse.js | Subscriber blocks the connection — must be a separate ioredis instance |
-| Token via `?token=` query param for SSE stream | Browser `EventSource` API cannot send custom headers |
-| All triggers fire-and-forget via `setImmediate` | Notification failures never propagate to business logic |
-| `multer.memoryStorage()` | No disk writes — buffer → Supabase Storage directly |
-| Module-based folder structure | Self-contained — each module is extractable to a microservice |
-| Refresh token rotation | Old token invalid after each use — prevents replay attacks |
+| Session Pooler (IPv4) | Network only supports IPv4 |
+| SQL fetches only `role = 'freelancer'` | All filtering in JS — transparent, debuggable |
+| Immutable transaction ledger | Every financial event INSERT only — full audit trail |
+| Wallet balance + escrow separate | Client's locked money is not spendable |
+| `FOR UPDATE` on wallet rows | Prevents concurrent double-spend |
+| Webhook routes before `express.json()` | Razorpay + WA need raw body for signature |
+| BullMQ for social publishing | Publishing takes 2–60s — must be async |
+| `Promise.allSettled` for multi-platform | One failure doesn't block others |
+| Per-platform status rows | Granular error visibility per platform |
+| Facebook tokens long-lived (60 days) | Short tokens would break scheduled posts |
+| WA state machine per session | Each client conversation tracked independently |
+| Handoff token single-use + 30min TTL | Security — cannot reuse or share |
+| Category number rejects non-token messages | Prevents cold-contact abuse |
+| Freelancer identity hidden from client | Client always sees "Mint More" |
+| 404 not 403 for unmatched jobs | Prevents information leakage |
+| `setImmediate` for all triggers | Non-blocking — failures never affect main logic |
+| `GREATEST(0, count - 1)` on decrements | Guards against negative values |
 
 ---
 
-## 📦 Phase 8 — Social Media Integration + Publishing System (Planned)
+## 📦 Phase 9 — AI Tools (Next)
 
-### Overview
-Companies (clients on Mint More) connect their owned social media accounts and publish content to multiple platforms simultaneously from a single dashboard. Freelancers deliver the content, clients approve it, and then publish directly — or schedule it for later — without leaving the platform.
+OpenRouter (text: GPT-4o, Claude, Llama), Replicate (images: Flux/SDXL, video), BullMQ async queue, SSE progress streaming, credit deduction from wallet, generation history.
 
-### Supported Platforms
-| Platform | API | Supported Content Types |
-|----------|-----|------------------------|
-| **Facebook** | Facebook Graph API v18+ | Text posts, image posts, video posts, Reels, Stories, link posts |
-| **Instagram** | Instagram Graph API | Feed images, Feed videos, Reels, Stories, Carousel posts |
-| **YouTube** | YouTube Data API v3 | Videos, Shorts, Community posts |
-
-### Planned Feature Set
-- **OAuth 2.0 connect flow** — per platform, per user account (tokens stored encrypted in DB)
-- **Token auto-refresh** — silently refresh platform tokens before expiry
-- **Multi-platform publish** — one action publishes to all selected platforms simultaneously
-- **Platform-specific field mapping** — Instagram needs `caption` + `media_type`, YouTube needs `snippet.title` + `snippet.description` + `status.privacyStatus` — handled transparently
-- **Rich content support** — text, single image, video, multi-image carousel, reels/shorts
-- **Hashtag + tag management** — add tags, mentions, location per post per platform
-- **Thumbnail support** — custom thumbnails for YouTube/video posts
-- **Scheduled publishing** — set a `publish_at` datetime; BullMQ processes it at the right time
-- **Post status tracking** — `draft → scheduled → publishing → published → failed` per platform
-- **Retry on failure** — failed platform publishes auto-retry up to 3 times
-- **Analytics pull** — read-only engagement data (reach, likes, views, comments, shares) per post
-- **Draft library** — save content as draft before publishing
-- **Admin oversight** — admin can view all client publishing activity
-
-### Planned Tables
-```sql
-social_accounts          -- connected platform accounts per user (tokens encrypted)
-social_posts             -- post content, schedule, overall status
-social_post_platforms    -- one row per platform per post (per-platform status + platform post ID)
-social_post_media        -- media files for a post (Supabase Storage URLs)
-social_analytics         -- pulled engagement metrics (pulled on-demand or via cron)
+**Planned routes:**
 ```
-
-### Planned Routes
+POST /ai/text/generate
+POST /ai/image/generate
+POST /ai/script/generate
+POST /ai/caption/suggest
+POST /ai/repurpose
+GET  /ai/generations
+GET  /ai/generations/:id
+GET  /ai/usage
 ```
-POST   /social/connect/:platform           -- start OAuth 2.0 flow (redirect to platform)
-GET    /social/callback/:platform          -- OAuth callback (exchange code for token)
-GET    /social/accounts                    -- list connected accounts
-DELETE /social/accounts/:accountId         -- disconnect an account
-
-POST   /social/posts                       -- create post (draft)
-PATCH  /social/posts/:postId               -- update draft
-POST   /social/posts/:postId/publish       -- publish now to selected platforms
-POST   /social/posts/:postId/schedule      -- schedule for a future datetime
-POST   /social/posts/:postId/cancel        -- cancel scheduled post
-GET    /social/posts                       -- list posts (filter by status/platform)
-GET    /social/posts/:postId               -- post detail + per-platform status
-
-GET    /social/analytics/:postId           -- engagement metrics for a post
-GET    /social/accounts/:accountId/pages   -- list Facebook pages for an account
-```
-
-### Key Technical Decisions (Planned)
-- OAuth tokens stored encrypted (AES-256) — never exposed in API responses
-- Platform API calls run via BullMQ queue — not in the HTTP request cycle
-- Per-platform publish runs in parallel (Promise.allSettled — one platform failing doesn't block others)
-- Media uploaded to Supabase Storage first, then URL sent to platform APIs
-- YouTube requires separate OAuth scopes — handled in connect flow
-- Instagram posting requires a Facebook Page connected to an Instagram Business account
-
----
-
-## 📦 Phase 9 — AI Tools Integration (Planned)
-
-### Overview
-AI-powered content creation tools built directly into Mint More. Clients generate drafts, images, and video scripts using AI models — then hand off to freelancers for refinement, or combine with Phase 8 to publish directly. Usage is tracked per user and deducted from the wallet (Phase 6 credits).
-
-### Planned Tools
-| Tool | Provider | Use Case |
-|------|----------|----------|
-| **Text generation** | OpenRouter (GPT-4o, Claude 3.5, Llama 3) | Blog posts, social captions, ad copy, email drafts, job briefs |
-| **Image generation** | Replicate (Flux Pro, SDXL) | Social media graphics, thumbnails, product images, banners |
-| **Video script** | OpenRouter | Scripts for Reels, YouTube Shorts, ads, explainer videos |
-| **Caption + hashtag suggester** | OpenRouter | Auto-generate captions + hashtags from image or brief |
-| **Content repurposing** | OpenRouter | Turn blog post → 5 social captions + email + tweet thread |
-| **AI job brief** | OpenRouter | Client types a short prompt → AI fills out the full job description |
-
-### Planned Features
-- **BullMQ async queue** — AI generation is async (2–30 seconds); job queued and result stored
-- **SSE progress streaming** — client sees real-time status (`queued → generating → done`)
-- **Credit system** — each tool consumes credits from the user's wallet (Phase 6)
-- **Rate limiting** — max N AI requests per user per hour (configurable per tool)
-- **Output persistence** — generated images/videos saved to Supabase Storage; text in DB
-- **Generation history** — all outputs saved and retrievable
-- **Retry on failure** — transient API errors auto-retry with exponential backoff
-
-### Planned Tables
-```sql
-ai_generations     -- every generation request, status, result URL or text
-ai_usage_log       -- credits consumed per user per action per day
-```
-
-### Planned Routes
-```
-POST   /ai/text/generate           -- generate text (caption, blog, copy, etc.)
-POST   /ai/image/generate          -- generate image
-POST   /ai/script/generate         -- generate video script
-POST   /ai/caption/suggest         -- suggest caption + hashtags from brief or image
-POST   /ai/repurpose               -- repurpose content across multiple formats
-GET    /ai/generations             -- user's generation history (paginated)
-GET    /ai/generations/:id         -- single generation result + status
-GET    /ai/usage                   -- credit usage summary for current user
-```
-
----
-
-## ✅ Recent Frontend / Integration Updates
-
-- Job posting now uses a conversational modal in the client dashboard (removed /client/jobs/new page).
-- Dashboard nav: removed "Post a Job"; "My Jobs" uses exact route matching to avoid false active state.
-- Public categories wired to `GET /categories` (admin categories no longer used client-side).
-- Jobs API mapping updated for snake_case responses and create payloads (`budget_type`, `pricing_mode`, `metadata` with `budget_min`/`budget_max`).
-- KYC API response unwrapped and mapped from `submissions` into `basic/identity/address` structure with safe defaults.
-- Admin users/categories list responses unwrapped and mapped to UI shapes (incl. `freelancer_level`).
-- `formatRelativeTime` now guards against null/invalid dates.
 
 ---
 
@@ -903,62 +977,62 @@ GET    /ai/usage                   -- credit usage summary for current user
 ```
 You are a senior full-stack engineer continuing "Mint More" — a controlled matchmaking SaaS.
 
-TECH: Node.js + Express + PostgreSQL (Supabase Session Pooler) + Redis + Supabase Storage + SSE
+TECH: Node.js + Express + PostgreSQL (Supabase Session Pooler) + Redis + BullMQ +
+      Supabase Storage + SSE + Razorpay + Meta WhatsApp Cloud API +
+      Facebook Graph API + Instagram Graph API + YouTube Data API v3
 
 DB: host=aws-1-ap-south-1.pooler.supabase.com port=5432 user=postgres.grnnqilqrzlnrtbfrpyx SSL=true
 
 COMPLETED:
-- Phase 1:          Foundation (server, DB pool, Redis, middleware, health check)
-- Phase 2:          Auth (JWT 15m + refresh 7d, bcrypt, Redis blacklist, RBAC)
-- Phase 3:          Profile + KYC (3-level progressive, Supabase Storage, atomic approval)
-- Phase 4A:         Admin (user approval, freelancer levels, categories, dashboard)
-- Phase 4B:         Jobs (lifecycle, role visibility, metadata JSONB, pricing_mode)
-- Phase 4C:         Proposals + Matching (scoring engine, tier notifications, pricing alignment)
-- Phase 4C-fix:     Matching rebuilt — SQL fetches role=freelancer only, ALL filters in JS
-- Phase 4C-pricing: category_price_ranges, market guidance, pricing score component
-- Phase 4D:         Negotiation (lock, 2-round negotiate, fallback, admin approval, assignment)
-- Phase 4E:         Auto matching + visibility control
-- Phase 5:          In-app notification system (SSE + Redis pub/sub + notification triggers)
+- Phase 1:          Foundation
+- Phase 2:          Auth (JWT + Redis blacklist + RBAC)
+- Phase 3:          Profile + KYC (3-level, Supabase Storage, atomic approval)
+- Phase 4A:         Admin (approval, freelancer levels, categories, dashboard)
+- Phase 4B:         Jobs (lifecycle, role visibility, metadata, pricing_mode)
+- Phase 4C:         Matching (scoring engine, tier notifications, pricing)
+- Phase 4C-fix:     Matching — SQL role=freelancer only, ALL filters in JS
+- Phase 4C-pricing: category_price_ranges, market guidance, pricing score
+- Phase 4D:         Negotiation (lock, 2-round, fallback, admin approval, assignment)
+- Phase 4E:         Auto matching + visibility control (404 unmatched freelancers)
+- Phase 5:          In-app notifications (SSE + Redis pub/sub + 15 trigger types)
+- Phase 6:          Wallet + Escrow (Razorpay, escrow hold/release/refund, withdrawals, admin adjust)
+- Phase 7:          WhatsApp-bridged chat (state machine, handoff tokens, anonymous freelancer)
+- Phase 8:          Social media publishing (FB/IG/YT OAuth, multi-platform, BullMQ scheduling, analytics)
 
 KEY RULES:
-- NOT a bidding marketplace — controlled matchmaking + structured negotiation
-- Matching auto-triggers on job create (open) and publish via setImmediate (non-blocking)
-- Freelancers ONLY see jobs they are in job_matched_candidates for (404 otherwise)
-- Matching: SQL = role=freelancer only — no other SQL filters — all eligibility in JS
-- rank 1 → position='primary'   → jobs.active_freelancer_id
-- rank 2 → position='backup'    → jobs.backup_freelancer_id
-- rank 3+ → position='candidate'
-- FOR UPDATE must NEVER be used with LEFT JOIN — lock jobs row only
-  (SELECT * FROM jobs WHERE id=$1 FOR UPDATE)
-- active_jobs_count = current workload (+1 on admin approve, -1 on decline/complete/cancel)
-- jobs_completed_count = historical total (fairness scoring only)
+- NOT a bidding marketplace — controlled matchmaking
+- Matching: SQL = role=freelancer only — all eligibility in JS
+- rank 1 → position=primary → jobs.active_freelancer_id
+- rank 2 → position=backup → jobs.backup_freelancer_id
+- FOR UPDATE never with LEFT JOIN
+- active_jobs_count = workload (+1 approve, -1 decline/complete/cancel)
+- jobs_completed_count = historical (fairness scoring)
 - Max negotiation rounds = 2
-- Job locking: first valid negotiation initiation locks the job
-- Fallback: backup promoted if primary fails, re-matching if no backup
+- Escrow held on admin approval, released on complete, refunded on cancel
+- Transactions immutable ledger (INSERT only)
+- Both Razorpay + WA webhooks need rawBody BEFORE express.json()
+- BullMQ worker started in app.js via startPublishWorker()
+- Social: each client connects their OWN accounts via OAuth — tokens stored per user_id
+- Social: Promise.allSettled for multi-platform publish — partial success allowed
+- Facebook tokens refreshed 7 days before 60-day expiry
+- WA: clients use main number → state machine → handoff token → category number
+- WA: MMSTART-XXXX only valid input on category number (awaiting_activation state)
+- WA: freelancer always anonymous to client (shows as "Mint More")
+- Notifications: in-app SSE only — no WhatsApp for freelancers
 - requireApproved on all marketplace routes
-- Response shape: { success, message, data } via apiResponse.js
-- AppError for operational errors, global errorHandler catches all
-- admin.routes.js imports jobController and calls jobController.adminListAllJobs
-- Notifications: in-app SSE only (NOT WhatsApp, NOT email — freelancers use app/website only)
-- All notification triggers use setImmediate — post-commit, non-blocking
-- SSE token passed as ?token= query param (EventSource cannot set headers)
-- Redis SSE channel: 'mint_more:notifications'
-- Notification failures NEVER affect business logic
+- Response: { success, message, data } via apiResponse.js
+- AppError for operational errors
+- admin.routes.js calls jobController.adminListAllJobs
 
-RECENT UPDATES:
-- Client job posting now uses a modal in dashboard; /client/jobs/new removed
-- Nav: removed "Post a Job"; "My Jobs" uses exact match
-- Public categories wired to GET /categories (admin categories not used client-side)
-- Jobs API mapping handles snake_case and create payloads (budget_type, pricing_mode, metadata budget_min/max)
-- KYC response unwrapped from { success, data } and mapped from submissions
-- Admin users/categories unwrapped and mapped (incl. freelancer_level)
-- formatRelativeTime handles null/invalid safely
+EXTERNAL STATUS:
+- Meta Business Verification: IN REVIEW (2 business days)
+- Facebook/Instagram permissions: pending after verification
+- YouTube OAuth: setup complete — add Client ID + Secret to .env
+- WA test number: +1 415 523 8886 (ID: 1092380853958380) seeded as MM Main
+- WA real numbers: need 2 fresh SIMs
 
-PLANNED PHASES:
-- Phase 6: Wallet + Escrow (Razorpay, wallet credit/debit, escrow on job, release on complete)
-- Phase 7: Real-time Chat (Socket.io, rooms, persistence, presence)
-- Phase 8: Social Media Publishing (Facebook/Instagram/YouTube OAuth, multi-platform post, schedule, analytics)
-- Phase 9: AI Tools (OpenRouter text, Replicate image/video, BullMQ queue, credit deduction)
+NEXT: Phase 9 — AI Tools Integration
+(OpenRouter text, Replicate image/video, BullMQ AI queue, SSE progress, credit deduction)
 
 Rules: one phase at a time, complete working code only, no shortcuts.
 ```

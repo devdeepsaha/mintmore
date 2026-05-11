@@ -1,0 +1,753 @@
+const { query, getClient }   = require('../../config/database');
+const { schedulePost, cancelScheduledPost } = require('./queue/publish.queue');
+const { publishToFacebook, getFacebookAnalytics, refreshFacebookToken } = require('./publishers/facebook.publisher');
+const { publishToInstagram, getInstagramAnalytics } = require('./publishers/instagram.publisher');
+const { publishToYouTube, getYouTubeAnalytics, refreshYouTubeToken } = require('./publishers/youtube.publisher');
+const AppError = require('../../utils/AppError');
+const logger   = require('../../utils/logger');
+const env      = require('../../config/env');
+const axios    = require('axios');
+
+const FB_API = 'https://graph.facebook.com/v19.0';
+
+// ── OAuth Flow ────────────────────────────────────────────────────────────────
+
+/**
+ * Generate the OAuth authorization URL for a platform.
+ * Client is redirected here to grant permissions.
+ */
+const getOAuthUrl = (platform, userId) => {
+  const state = Buffer.from(JSON.stringify({ platform, userId })).toString('base64');
+
+  if (platform === 'facebook') {
+    const scopes = [
+      'pages_show_list',
+      'pages_read_engagement',
+      'pages_manage_posts',
+      'instagram_basic',
+      'instagram_content_publish',
+      'instagram_manage_insights',
+      'public_profile',
+    ].join(',');
+
+    const params = new URLSearchParams({
+      client_id:     env.social.facebook.appId,
+      redirect_uri:  env.social.facebook.redirectUri,
+      scope:         scopes,
+      response_type: 'code',
+      state,
+    });
+
+    return `https://www.facebook.com/v19.0/dialog/oauth?${params}`;
+  }
+
+  if (platform === 'youtube') {
+    const params = new URLSearchParams({
+      client_id:     env.social.youtube.clientId,
+      redirect_uri:  env.social.youtube.redirectUri,
+      scope:         'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',
+      response_type: 'code',
+      access_type:   'offline',
+      prompt:        'consent',
+      state,
+    });
+
+    return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  }
+
+  throw new AppError(`Unsupported platform: ${platform}`, 400);
+};
+
+/**
+ * Handle OAuth callback — exchange code for token and save account.
+ * Called when platform redirects back to our callback URL.
+ */
+const handleOAuthCallback = async (platform, code, state) => {
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64').toString('utf8'));
+  } catch {
+    throw new AppError('Invalid OAuth state', 400);
+  }
+
+  const { userId } = parsedState;
+
+  if (platform === 'facebook') {
+    return handleFacebookCallback(userId, code);
+  }
+
+  if (platform === 'youtube') {
+    return handleYouTubeCallback(userId, code);
+  }
+
+  throw new AppError(`Unsupported platform: ${platform}`, 400);
+};
+
+const handleFacebookCallback = async (userId, code) => {
+  // Exchange code for short-lived token
+  const tokenRes = await axios.get(`${FB_API}/oauth/access_token`, {
+    params: {
+      client_id:     env.social.facebook.appId,
+      client_secret: env.social.facebook.appSecret,
+      redirect_uri:  env.social.facebook.redirectUri,
+      code,
+    },
+  });
+
+  const shortToken = tokenRes.data.access_token;
+
+  // Exchange for long-lived token (60 days)
+  const longTokenRes = await axios.get(`${FB_API}/oauth/access_token`, {
+    params: {
+      grant_type:        'fb_exchange_token',
+      client_id:         env.social.facebook.appId,
+      client_secret:     env.social.facebook.appSecret,
+      fb_exchange_token: shortToken,
+    },
+  });
+
+  const longToken   = longTokenRes.data.access_token;
+  const expiresIn   = longTokenRes.data.expires_in || 5184000; // 60 days
+  const expiresAt   = new Date(Date.now() + expiresIn * 1000);
+
+  // Get user info
+  const meRes = await axios.get(`${FB_API}/me`, {
+    params: { fields: 'id,name,picture', access_token: longToken },
+  });
+
+  // Get pages they manage
+  const pagesRes = await axios.get(`${FB_API}/me/accounts`, {
+    params: { access_token: longToken },
+  });
+
+  const pages = pagesRes.data.data || [];
+  const savedAccounts = [];
+
+  for (const page of pages) {
+    // Get Instagram Business Account linked to this page
+    let igAccountId = null;
+    try {
+      const igRes = await axios.get(`${FB_API}/${page.id}`, {
+        params: {
+          fields:       'instagram_business_account',
+          access_token: page.access_token,
+        },
+      });
+      igAccountId = igRes.data.instagram_business_account?.id || null;
+    } catch {
+      // Page may not have IG connected
+    }
+
+    // Save Facebook Page account
+    const fbAccount = await upsertSocialAccount({
+      userId,
+      platform:           'facebook',
+      platformUserId:     page.id,
+      platformName:       page.name,
+      pageId:             page.id,
+      pageName:           page.name,
+      accessToken:        page.access_token,  // page-level token
+      tokenExpiresAt:     expiresAt,
+      tokenScope:         'pages_manage_posts,pages_read_engagement',
+      instagramAccountId: igAccountId,
+    });
+    savedAccounts.push(fbAccount);
+
+    // Save Instagram account if linked
+    if (igAccountId) {
+      const igInfoRes = await axios.get(`${FB_API}/${igAccountId}`, {
+        params: {
+          fields:       'id,name,username,profile_picture_url',
+          access_token: page.access_token,
+        },
+      });
+      const igInfo = igInfoRes.data;
+
+      const igAccount = await upsertSocialAccount({
+        userId,
+        platform:           'instagram',
+        platformUserId:     igAccountId,
+        platformUsername:   igInfo.username,
+        platformName:       igInfo.name,
+        platformAvatarUrl:  igInfo.profile_picture_url,
+        pageId:             page.id,
+        instagramAccountId: igAccountId,
+        accessToken:        page.access_token,
+        tokenExpiresAt:     expiresAt,
+      });
+      savedAccounts.push(igAccount);
+    }
+  }
+
+  logger.info('Facebook OAuth completed', { userId, pagesConnected: pages.length });
+  return savedAccounts;
+};
+
+const handleYouTubeCallback = async (userId, code) => {
+  const { google } = require('googleapis');
+  const auth = new google.auth.OAuth2(
+    env.social.youtube.clientId,
+    env.social.youtube.clientSecret,
+    env.social.youtube.redirectUri
+  );
+
+  const { tokens } = await auth.getToken(code);
+  auth.setCredentials(tokens);
+
+  const youtube   = require('googleapis').google.youtube({ version: 'v3', auth });
+  const channelRes = await youtube.channels.list({
+    part: ['snippet', 'statistics'],
+    mine: true,
+  });
+
+  const channel = channelRes.data.items?.[0];
+  if (!channel) throw new AppError('No YouTube channel found for this account', 404);
+
+  const account = await upsertSocialAccount({
+    userId,
+    platform:          'youtube',
+    platformUserId:    channel.id,
+    platformName:      channel.snippet.title,
+    platformAvatarUrl: channel.snippet.thumbnails?.default?.url,
+    accessToken:       tokens.access_token,
+    refreshToken:      tokens.refresh_token,
+    tokenExpiresAt:    new Date(tokens.expiry_date),
+    tokenScope:        tokens.scope,
+  });
+
+  logger.info('YouTube OAuth completed', { userId, channelId: channel.id });
+  return [account];
+};
+
+// ── Account Management ────────────────────────────────────────────────────────
+
+const upsertSocialAccount = async ({
+  userId, platform, platformUserId,
+  platformUsername, platformName, platformAvatarUrl,
+  pageId, pageName, instagramAccountId,
+  accessToken, refreshToken, tokenExpiresAt, tokenScope,
+}) => {
+  const result = await query(
+    `INSERT INTO social_accounts
+       (user_id, platform, platform_user_id, platform_username, platform_name,
+        platform_avatar_url, page_id, page_name, instagram_account_id,
+        access_token, refresh_token, token_expires_at, token_scope)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (user_id, platform, platform_user_id) DO UPDATE SET
+       platform_username   = EXCLUDED.platform_username,
+       platform_name       = EXCLUDED.platform_name,
+       platform_avatar_url = EXCLUDED.platform_avatar_url,
+       access_token        = EXCLUDED.access_token,
+       refresh_token       = COALESCE(EXCLUDED.refresh_token, social_accounts.refresh_token),
+       token_expires_at    = EXCLUDED.token_expires_at,
+       token_scope         = EXCLUDED.token_scope,
+       instagram_account_id = COALESCE(EXCLUDED.instagram_account_id, social_accounts.instagram_account_id),
+       is_active           = true,
+       last_error          = NULL
+     RETURNING *`,
+    [
+      userId, platform, platformUserId,
+      platformUsername || null, platformName || null,
+      platformAvatarUrl || null,
+      pageId || null, pageName || null,
+      instagramAccountId || null,
+      accessToken, refreshToken || null,
+      tokenExpiresAt || null, tokenScope || null,
+    ]
+  );
+  return result.rows[0];
+};
+
+const getMyAccounts = async (userId) => {
+  const result = await query(
+    `SELECT
+       id, platform, platform_user_id, platform_username,
+       platform_name, platform_avatar_url,
+       page_id, page_name,
+       is_active, last_used_at, last_error,
+       token_expires_at,
+       created_at
+     FROM social_accounts
+     WHERE user_id = $1 AND is_active = true
+     ORDER BY platform ASC, platform_name ASC`,
+    [userId]
+  );
+  return result.rows;
+};
+
+const disconnectAccount = async (accountId, userId) => {
+  const result = await query(
+    `UPDATE social_accounts
+     SET is_active = false
+     WHERE id = $1 AND user_id = $2
+     RETURNING id, platform, platform_name`,
+    [accountId, userId]
+  );
+  if (!result.rows[0]) throw new AppError('Account not found', 404);
+  return result.rows[0];
+};
+
+/**
+ * Refresh a token if it's expiring within 7 days.
+ */
+const refreshTokenIfNeeded = async (account) => {
+  if (!account.token_expires_at) return account;
+
+  const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const expiresAt        = new Date(account.token_expires_at);
+
+  if (expiresAt > sevenDaysFromNow) return account; // still fresh
+
+  logger.info('Refreshing expiring token', {
+    accountId: account.id,
+    platform:  account.platform,
+    expiresAt,
+  });
+
+  let newTokenData = null;
+
+  if (account.platform === 'facebook' || account.platform === 'instagram') {
+    newTokenData = await refreshFacebookToken(account);
+  } else if (account.platform === 'youtube') {
+    newTokenData = await refreshYouTubeToken(account);
+  }
+
+  if (!newTokenData) return account;
+
+  await query(
+    `UPDATE social_accounts
+     SET access_token     = $1,
+         token_expires_at = $2
+     WHERE id = $3`,
+    [newTokenData.access_token, newTokenData.token_expires_at, account.id]
+  );
+
+  return { ...account, ...newTokenData };
+};
+
+// ── Post Management ───────────────────────────────────────────────────────────
+
+const createPost = async (userId, data) => {
+  const result = await query(
+    `INSERT INTO social_posts
+       (user_id, title, caption, hashtags, mentions,
+        content_type, target_platforms, publish_at,
+        status, source_job_id, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING *`,
+    [
+      userId,
+      data.title || null,
+      data.caption || null,
+      data.hashtags || [],
+      data.mentions || [],
+      data.content_type,
+      data.target_platforms,
+      data.publish_at || null,
+      'draft',
+      data.source_job_id || null,
+      JSON.stringify(data.metadata || {}),
+    ]
+  );
+
+  return result.rows[0];
+};
+
+const addMediaToPost = async (postId, userId, mediaItems) => {
+  const values = mediaItems.map((m, i) => ({
+    postId, userId,
+    mediaUrl:     m.media_url,
+    mediaType:    m.media_type,
+    mimeType:     m.mime_type || null,
+    fileSizeBytes: m.file_size_bytes || null,
+    durationSecs: m.duration_seconds || null,
+    width:        m.width || null,
+    height:       m.height || null,
+    thumbnailUrl: m.thumbnail_url || null,
+    altText:      m.alt_text || null,
+    sortOrder:    i,
+  }));
+
+  const inserted = [];
+  for (const v of values) {
+    const res = await query(
+      `INSERT INTO social_post_media
+         (post_id, user_id, media_url, media_type, mime_type,
+          file_size_bytes, duration_seconds, width, height,
+          thumbnail_url, alt_text, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       RETURNING *`,
+      [
+        v.postId, v.userId, v.mediaUrl, v.mediaType, v.mimeType,
+        v.fileSizeBytes, v.durationSecs, v.width, v.height,
+        v.thumbnailUrl, v.altText, v.sortOrder,
+      ]
+    );
+    inserted.push(res.rows[0]);
+  }
+  return inserted;
+};
+
+/**
+ * Publish a post immediately or schedule it.
+ * Creates per-platform status rows and enqueues BullMQ job.
+ */
+const publishPost = async (postId, userId) => {
+  const postResult = await query(
+    'SELECT * FROM social_posts WHERE id = $1 AND user_id = $2',
+    [postId, userId]
+  );
+  const post = postResult.rows[0];
+  if (!post) throw new AppError('Post not found', 404);
+  if (!['draft', 'failed'].includes(post.status)) {
+    throw new AppError(`Post cannot be published from status: ${post.status}`, 400);
+  }
+
+  // Create per-platform status rows
+  for (const platform of post.target_platforms) {
+    // Find user's connected account for this platform
+    const accountResult = await query(
+      `SELECT id FROM social_accounts
+       WHERE user_id = $1 AND platform = $2 AND is_active = true
+       LIMIT 1`,
+      [userId, platform]
+    );
+
+    const account = accountResult.rows[0];
+
+    await query(
+      `INSERT INTO social_post_platforms
+         (post_id, social_account_id, platform, status)
+       VALUES ($1, $2, $3, 'pending')
+       ON CONFLICT (post_id, platform) DO UPDATE SET status = 'pending'`,
+      [postId, account?.id || null, platform]
+    );
+  }
+
+  const isScheduled = post.publish_at && new Date(post.publish_at) > new Date();
+  const newStatus   = isScheduled ? 'scheduled' : 'publishing';
+
+  const queueJobId = await schedulePost(postId, post.publish_at);
+
+  await query(
+    `UPDATE social_posts
+     SET status = $1, queue_job_id = $2
+     WHERE id = $3`,
+    [newStatus, queueJobId.toString(), postId]
+  );
+
+  logger.info('Post queued for publishing', { postId, isScheduled, queueJobId });
+  return { postId, status: newStatus, queue_job_id: queueJobId };
+};
+
+/**
+ * The actual publish execution — called by BullMQ worker.
+ * Publishes to ALL target platforms in parallel.
+ */
+const executePublish = async (postId) => {
+  const postResult = await query(
+    `SELECT sp.*, 
+       array_agg(
+         json_build_object(
+           'media_url', spm.media_url,
+           'media_type', spm.media_type,
+           'mime_type', spm.mime_type,
+           'duration_seconds', spm.duration_seconds,
+           'width', spm.width,
+           'height', spm.height,
+           'thumbnail_url', spm.thumbnail_url,
+           'alt_text', spm.alt_text
+         ) ORDER BY spm.sort_order
+       ) FILTER (WHERE spm.id IS NOT NULL) AS media
+     FROM social_posts sp
+     LEFT JOIN social_post_media spm ON spm.post_id = sp.id
+     WHERE sp.id = $1
+     GROUP BY sp.id`,
+    [postId]
+  );
+
+  const post = postResult.rows[0];
+  if (!post) throw new Error(`Post ${postId} not found`);
+
+  const media = post.media || [];
+
+  // Get all per-platform rows
+  const platformsResult = await query(
+    `SELECT spp.*, sa.*,
+       spp.id AS platform_row_id
+     FROM social_post_platforms spp
+     JOIN social_accounts sa ON sa.id = spp.social_account_id
+     WHERE spp.post_id = $1 AND spp.status = 'pending'`,
+    [postId]
+  );
+
+  const platforms = platformsResult.rows;
+
+  // Mark all as 'publishing'
+  await query(
+    `UPDATE social_post_platforms SET status = 'publishing' WHERE post_id = $1`,
+    [postId]
+  );
+
+  // Publish to each platform in parallel
+  const results = await Promise.allSettled(
+    platforms.map(async (platformRow) => {
+      // Refresh token if needed
+      const account = await refreshTokenIfNeeded(platformRow);
+
+      let result;
+      switch (platformRow.platform) {
+        case 'facebook':
+          result = await publishToFacebook(account, post, media);
+          break;
+        case 'instagram':
+          result = await publishToInstagram(account, post, media);
+          break;
+        case 'youtube':
+          result = await publishToYouTube(account, post, media);
+          break;
+        default:
+          throw new Error(`Unknown platform: ${platformRow.platform}`);
+      }
+
+      // Mark platform as published
+      await query(
+        `UPDATE social_post_platforms
+         SET status           = 'published',
+             platform_post_id = $1,
+             platform_post_url = $2,
+             published_at     = NOW(),
+             error_message    = NULL
+         WHERE id = $3`,
+        [result.platform_post_id, result.platform_post_url, platformRow.platform_row_id]
+      );
+
+      // Update account last_used_at
+      await query(
+        'UPDATE social_accounts SET last_used_at = NOW() WHERE id = $1',
+        [platformRow.id]
+      );
+
+      return { platform: platformRow.platform, success: true, ...result };
+    })
+  );
+
+  // Assess overall post status
+  const allSuccess = results.every((r) => r.status === 'fulfilled');
+  const allFailed  = results.every((r) => r.status === 'rejected');
+
+  for (const [i, result] of results.entries()) {
+    if (result.status === 'rejected') {
+      await query(
+        `UPDATE social_post_platforms
+         SET status        = 'failed',
+             error_message = $1,
+             retry_count   = retry_count + 1,
+             last_retry_at = NOW()
+         WHERE post_id = $2 AND platform = $3`,
+        [result.reason?.message || 'Unknown error', postId, platforms[i].platform]
+      );
+    }
+  }
+
+  const finalStatus = allFailed ? 'failed' : 'published';
+  await query(
+    `UPDATE social_posts
+     SET status       = $1,
+         published_at = $2
+     WHERE id = $3`,
+    [finalStatus, allSuccess ? new Date() : null, postId]
+  );
+
+  logger.info('executePublish complete', {
+    postId,
+    finalStatus,
+    results: results.map((r, i) => ({
+      platform: platforms[i]?.platform,
+      success:  r.status === 'fulfilled',
+    })),
+  });
+
+  if (allFailed) {
+    throw new Error('All platform publishes failed');
+  }
+};
+
+const cancelPost = async (postId, userId) => {
+  const result = await query(
+    'SELECT * FROM social_posts WHERE id = $1 AND user_id = $2',
+    [postId, userId]
+  );
+  const post = result.rows[0];
+  if (!post) throw new AppError('Post not found', 404);
+
+  if (!['draft', 'scheduled'].includes(post.status)) {
+    throw new AppError(`Cannot cancel a post with status: ${post.status}`, 400);
+  }
+
+  if (post.queue_job_id) {
+    await cancelScheduledPost(post.queue_job_id);
+  }
+
+  await query(
+    `UPDATE social_posts SET status = 'cancelled' WHERE id = $1`,
+    [postId]
+  );
+
+  return { postId, status: 'cancelled' };
+};
+
+const getMyPosts = async (userId, { page = 1, limit = 20, status, platform } = {}) => {
+  const offset = (page - 1) * limit;
+  const params = [userId];
+  const conditions = [];
+
+  if (status) {
+    params.push(status);
+    conditions.push(`sp.status = $${params.length}`);
+  }
+
+  const whereExtra = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+
+  const result = await query(
+    `SELECT
+       sp.*,
+       array_agg(
+         json_build_object(
+           'platform', spp.platform,
+           'status', spp.status,
+           'platform_post_url', spp.platform_post_url,
+           'error_message', spp.error_message,
+           'published_at', spp.published_at
+         )
+       ) FILTER (WHERE spp.id IS NOT NULL) AS platform_statuses
+     FROM social_posts sp
+     LEFT JOIN social_post_platforms spp ON spp.post_id = sp.id
+     WHERE sp.user_id = $1 ${whereExtra}
+     GROUP BY sp.id
+     ORDER BY sp.created_at DESC
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset]
+  );
+
+  const countResult = await query(
+    `SELECT COUNT(*) FROM social_posts sp WHERE sp.user_id = $1 ${whereExtra}`,
+    params
+  );
+
+  return {
+    posts: result.rows,
+    pagination: {
+      page, limit,
+      total: parseInt(countResult.rows[0].count, 10),
+      pages: Math.ceil(countResult.rows[0].count / limit),
+    },
+  };
+};
+
+const getPostById = async (postId, userId, role) => {
+  const result = await query(
+    `SELECT
+       sp.*,
+       array_agg(
+         json_build_object(
+           'platform', spp.platform,
+           'status', spp.status,
+           'platform_post_id', spp.platform_post_id,
+           'platform_post_url', spp.platform_post_url,
+           'error_message', spp.error_message,
+           'views_count', spp.views_count,
+           'likes_count', spp.likes_count,
+           'published_at', spp.published_at
+         )
+       ) FILTER (WHERE spp.id IS NOT NULL) AS platform_statuses,
+       array_agg(
+         json_build_object(
+           'media_url', spm.media_url,
+           'media_type', spm.media_type,
+           'sort_order', spm.sort_order
+         ) ORDER BY spm.sort_order
+       ) FILTER (WHERE spm.id IS NOT NULL) AS media
+     FROM social_posts sp
+     LEFT JOIN social_post_platforms spp ON spp.post_id = sp.id
+     LEFT JOIN social_post_media spm ON spm.post_id = sp.id
+     WHERE sp.id = $1
+     GROUP BY sp.id`,
+    [postId]
+  );
+
+  const post = result.rows[0];
+  if (!post) throw new AppError('Post not found', 404);
+
+  if (role !== 'admin' && post.user_id !== userId) {
+    throw new AppError('Post not found', 404);
+  }
+
+  return post;
+};
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+
+const pullAnalytics = async (postId, userId) => {
+  const platformsResult = await query(
+    `SELECT spp.*, sa.access_token, sa.refresh_token,
+            sa.instagram_account_id, sa.page_id, sa.platform AS acc_platform
+     FROM social_post_platforms spp
+     JOIN social_accounts sa ON sa.id = spp.social_account_id
+     WHERE spp.post_id = $1 AND spp.status = 'published'`,
+    [postId]
+  );
+
+  const updated = [];
+
+  for (const row of platformsResult.rows) {
+    let analytics = null;
+
+    if (row.platform === 'facebook') {
+      analytics = await getFacebookAnalytics(row, row.platform_post_id);
+    } else if (row.platform === 'instagram') {
+      analytics = await getInstagramAnalytics(row, row.platform_post_id);
+    } else if (row.platform === 'youtube') {
+      analytics = await getYouTubeAnalytics(row, row.platform_post_id);
+    }
+
+    if (analytics) {
+      await query(
+        `UPDATE social_post_platforms
+         SET views_count         = $1,
+             likes_count         = $2,
+             comments_count      = $3,
+             shares_count        = $4,
+             reach_count         = $5,
+             analytics_pulled_at = NOW()
+         WHERE id = $6`,
+        [
+          analytics.views_count,
+          analytics.likes_count,
+          analytics.comments_count,
+          analytics.shares_count,
+          analytics.reach_count,
+          row.id,
+        ]
+      );
+      updated.push({ platform: row.platform, analytics });
+    }
+  }
+
+  return updated;
+};
+
+module.exports = {
+  getOAuthUrl,
+  handleOAuthCallback,
+  getMyAccounts,
+  disconnectAccount,
+  createPost,
+  addMediaToPost,
+  publishPost,
+  executePublish,
+  cancelPost,
+  getMyPosts,
+  getPostById,
+  pullAnalytics,
+};

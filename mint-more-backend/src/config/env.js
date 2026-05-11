@@ -62,6 +62,20 @@ const env = {
     appSecret:     process.env.META_APP_SECRET,
   },
 
+  social: {
+    facebook: {
+      appId:       process.env.FACEBOOK_APP_ID,
+      appSecret:   process.env.FACEBOOK_APP_SECRET,
+      redirectUri: process.env.FACEBOOK_REDIRECT_URI,
+    },
+    youtube: {
+      clientId:     process.env.YOUTUBE_CLIENT_ID,
+      clientSecret: process.env.YOUTUBE_CLIENT_SECRET,
+      redirectUri:  process.env.YOUTUBE_REDIRECT_URI,
+    },
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  },
+
   isDev:  process.env.NODE_ENV === 'development',
   isProd: process.env.NODE_ENV === 'production',
 };

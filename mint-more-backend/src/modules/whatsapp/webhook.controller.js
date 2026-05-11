@@ -53,6 +53,9 @@ const handleWebhook = async (req, res) => {
   // Meta will retry if we don't respond within 20 seconds
   res.status(200).json({ status: 'ok' });
 
+  // After signature check, before processing
+ logger.info('WA webhook raw payload', { body: req.rawBody?.slice(0, 500) });
+
   // ── Process payload asynchronously ──────────────────────────────────────────
   try {
     const body = JSON.parse(req.rawBody);
@@ -78,8 +81,12 @@ const handleWebhook = async (req, res) => {
       }
     }
   } catch (err) {
-    logger.error('WhatsApp webhook processing error', { error: err.message });
-  }
+    logger.error('WhatsApp webhook processing error', { 
+      error:   err.message,
+      stack:   err.stack,
+      details: err,
+    });
+}
 };
 
 const { processMessage } = require('./conversation.service');

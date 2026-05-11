@@ -8,3 +8,4 @@ export { matchingApi } from "./matching";
 export { notificationsApi } from "./notifications";
 export { adminApi } from "./admin";
 export { categoriesApi } from "./categories";
+export { walletApi } from "./wallet";
