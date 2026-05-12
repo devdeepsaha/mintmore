@@ -2,6 +2,7 @@ const { getRedis } = require('../config/redis');
 const { verifyAccessToken } = require('../utils/jwt');
 const { SSE_CHANNEL } = require('../modules/notifications/notification.service');
 const logger = require('../utils/logger');
+const { AI_PROGRESS_CHANNEL } = require('../modules/ai/ai.service');
 
 /**
  * Active SSE connections map.
@@ -85,6 +86,12 @@ const initSSESubscriber = () => {
     }
   });
 
+  // Subscribe to AI progress channel
+  redisSubscriber.subscribe(AI_PROGRESS_CHANNEL, (err) => {
+    if (err) logger.error('SSE AI subscriber failed', { error: err.message });
+    else logger.info('SSE AI progress subscriber ready');
+  });
+
   // Handle chat messages — push to room participants
   // NOTE: The existing 'message' handler already runs.
   // We extend it to handle both channels:
@@ -115,9 +122,20 @@ const initSSESubscriber = () => {
           connections.forEach((res) => { try { res.write(data); } catch {} });
         });
       }
+
+      if (channel === AI_PROGRESS_CHANNEL) {
+        const { userId } = payload;
+        const userConns  = activeConnections.get(userId);
+        if (!userConns)  return;
+        const data = `data: ${JSON.stringify({ type: 'ai_progress', ...payload })}\n\n`;
+        userConns.forEach((res) => { try { res.write(data); } catch {} });
+      }
     } catch (err) {
       logger.warn('SSE message handler error', { error: err.message });
     }
+  
+    
+  
   });
 
 };

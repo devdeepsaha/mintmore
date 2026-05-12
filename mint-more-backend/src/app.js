@@ -9,6 +9,7 @@ const { globalRateLimiter } = require('./middleware/rateLimiter');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const { initSSESubscriber } = require('./middleware/sse');
 const { startPublishWorker } = require('./modules/social/queue/publish.worker');
+const { startAIWorker }  = require('./modules/ai/queue/ai.worker');
 
 const healthRouter       = require('./modules/health/health.routes');
 const authRouter         = require('./modules/auth/auth.routes');
@@ -26,10 +27,12 @@ const paymentRouter      = require('./modules/payments/payment.routes');
 const chatRouter         = require('./modules/chat/chat.routes');
 const whatsappRouter     = require('./modules/whatsapp/webhook.routes');
 const socialRouter       = require('./modules/social/social.routes');
+const aiRouter           = require('./modules/ai/ai.routes');
 
 // Initialise background services
 initSSESubscriber();
 startPublishWorker();
+startAIWorker();
 
 const app = express();
 
@@ -73,6 +76,7 @@ app.use(`/api/${env.apiVersion}/notifications`, notificationRouter);
 app.use(`/api/${env.apiVersion}/wallet`,        walletRouter);
 app.use(`/api/${env.apiVersion}/chat`,          chatRouter);
 app.use(`/api/${env.apiVersion}/social`,        socialRouter);
+app.use(`/api/${env.apiVersion}/ai`,            aiRouter);
 
 app.use(notFound);
 app.use(errorHandler);

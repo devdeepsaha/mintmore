@@ -76,6 +76,14 @@ const env = {
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   },
 
+  ai: {
+    openrouterKey:        process.env.OPENROUTER_API_KEY,
+    replicateToken:       process.env.REPLICATE_API_TOKEN,
+    textCreditPer1kTokens: parseInt(process.env.AI_TEXT_CREDIT_PER_1K_TOKENS || '2', 10),
+    imageCreditBase:      parseInt(process.env.AI_IMAGE_CREDIT_BASE || '10', 10),
+    maxRequestsPerHour:   parseInt(process.env.AI_MAX_REQUESTS_PER_HOUR || '20', 10),
+  },
+
   isDev:  process.env.NODE_ENV === 'development',
   isProd: process.env.NODE_ENV === 'production',
 };
