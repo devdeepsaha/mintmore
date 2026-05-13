@@ -231,3 +231,113 @@ VALUES
   'premium', 10, 2000000, ARRAY['powerful','huge-context','google'], false, 22
 )
 ON CONFLICT (openrouter_id) DO NOTHING;
+
+-- Add 'video' to ai_tool_type enum
+ALTER TYPE ai_tool_type ADD VALUE IF NOT EXISTS 'video';
+
+-- Seed the 13 video models from OpenRouter
+INSERT INTO ai_models
+  (openrouter_id, name, description, provider_name,
+   supported_tools, tier, cost_per_1k_tokens,
+   context_window, tags, is_trending, sort_order)
+VALUES
+(
+  'google/veo-3.1',
+  'Google Veo 3.1',
+  'State-of-the-art 1080p video with native audio, dialogue, scene extension up to 140s, 4K upscaling.',
+  'Google',
+  ARRAY['video']::ai_tool_type[],
+  'premium', 0, 0,
+  ARRAY['best-quality','audio','1080p','google'], true, 100
+),
+(
+  'google/veo-3.1-fast',
+  'Google Veo 3.1 Fast',
+  'Mid-tier video generation balancing speed and quality. Native audio, multiple resolutions.',
+  'Google',
+  ARRAY['video']::ai_tool_type[],
+  'standard', 0, 0,
+  ARRAY['fast','audio','google'], true, 101
+),
+(
+  'google/veo-3.1-lite',
+  'Google Veo 3.1 Lite',
+  'Most cost-effective video model. 720p/1080p, 4-8 second clips. Great for short-form content.',
+  'Google',
+  ARRAY['video']::ai_tool_type[],
+  'free', 0, 0,
+  ARRAY['cheap','fast','google','short-form'], false, 102
+),
+(
+  'openai/sora-2-pro',
+  'OpenAI Sora 2 Pro',
+  'Flagship video model. Physics-accurate motion, synchronized audio, consistent multi-shot.',
+  'OpenAI',
+  ARRAY['video']::ai_tool_type[],
+  'premium', 0, 0,
+  ARRAY['best-quality','audio','openai','cinematic'], false, 103
+),
+(
+  'bytedance/seedance-2.0',
+  'ByteDance Seedance 2.0',
+  'Strong character consistency, visual style, and camera movement from reference material.',
+  'ByteDance',
+  ARRAY['video']::ai_tool_type[],
+  'premium', 0, 0,
+  ARRAY['character-consistency','cinematic','bytedance'], false, 104
+),
+(
+  'bytedance/seedance-2.0-fast',
+  'ByteDance Seedance 2.0 Fast',
+  'Faster, lower-cost Seedance. Text-to-video and image-to-video with first/last frame control.',
+  'ByteDance',
+  ARRAY['video']::ai_tool_type[],
+  'standard', 0, 0,
+  ARRAY['fast','bytedance'], false, 105
+),
+(
+  'bytedance/seedance-1.5-pro',
+  'ByteDance Seedance 1.5 Pro',
+  'Unified audio-visual generation. Multi-language lip-sync, cinematic camera control, 1080p.',
+  'ByteDance',
+  ARRAY['video']::ai_tool_type[],
+  'premium', 0, 0,
+  ARRAY['lip-sync','audio','multilingual','bytedance'], false, 106
+),
+(
+  'alibaba/wan-2.7',
+  'Alibaba Wan 2.7',
+  'Text-to-video and image-to-video with first/last frame control and reference-to-video.',
+  'Alibaba',
+  ARRAY['video']::ai_tool_type[],
+  'standard', 0, 0,
+  ARRAY['alibaba','reference-video'], false, 107
+),
+(
+  'alibaba/wan-2.6',
+  'Alibaba Wan 2.6',
+  '1080p at 24fps, native audio-visual sync, precise lip-sync. Up to 15 second clips.',
+  'Alibaba',
+  ARRAY['video']::ai_tool_type[],
+  'premium', 0, 0,
+  ARRAY['1080p','lip-sync','audio','alibaba'], false, 108
+),
+(
+  'kwaivgi/kling-video-o1',
+  'Kling Video O1',
+  'Cinematic content with first/last frame control. 5 or 10 second clips.',
+  'Kuaishou',
+  ARRAY['video']::ai_tool_type[],
+  'standard', 0, 0,
+  ARRAY['cinematic','kling'], false, 109
+),
+(
+  'minimax/hailuo-2.3',
+  'MiniMax Hailuo 2.3',
+  'Realistic motion and expressive character rendering. Text-to-video and image-to-video.',
+  'MiniMax',
+  ARRAY['video']::ai_tool_type[],
+  'standard', 0, 0,
+  ARRAY['realistic','character','minimax'], false, 110
+)
+ON CONFLICT (openrouter_id) DO NOTHING;

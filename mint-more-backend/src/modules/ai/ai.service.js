@@ -8,7 +8,11 @@ const {
   getAllModels, getModelByOpenRouterId,
   getFreeModels, bustModelCache,
 } = require('./models/model.registry');
-const { generateText, generateImage } = require('./providers/openrouter.provider');
+const {
+  generateText,
+  generateImage,
+  generateVideo,
+} = require('./providers/openrouter.provider');
 const { uploadFile }         = require('../../config/supabase');
 const AppError  = require('../../utils/AppError');
 const logger    = require('../../utils/logger');
@@ -47,6 +51,11 @@ const buildPrompt = (toolType, userPrompt, params = {}, modelSystemPrompts = {})
     image: {
       system: customSystemPrompt || '',
       user:   userPrompt, // image prompts go direct
+    },
+    video: {
+     system: customSystemPrompt ||
+      'You are helping generate a video. Output only a clean, descriptive prompt optimised for video generation AI models.',
+     user: userPrompt, // video prompts go direct to the model
     },
   };
 
@@ -245,6 +254,7 @@ const processGeneration = async (generationId) => {
   try {
     let result;
     const isImage = generation.tool_type === 'image';
+    const isVideo = generation.tool_type === 'video';
 
     if (isImage) {
       // ── Image generation ────────────────────────────────────────────────────
@@ -274,6 +284,46 @@ const processGeneration = async (generationId) => {
              completed_at = NOW()
          WHERE id = $4`,
         [storedUrl, creditCost, result.duration_ms, generationId]
+      );
+    } else if (isVideo) {
+      // ── Video generation ────────────────────────────────────────────────────
+      result = await generateVideo(openrouterId, generation.prompt, params);
+
+      // Download video and store in Supabase Storage
+      const videoRes  = await fetch(result.url);
+      const buffer    = Buffer.from(await videoRes.arrayBuffer());
+      const filePath  = `ai-generated/${generation.user_id}/${generationId}.mp4`;
+      const storedUrl = await uploadFile('job-attachments', filePath, buffer, 'video/mp4');
+
+      // Cost: per second of output video
+      // Admin sets cost in model metadata - we use a flat per-second rate
+      // Default: free models = 0 credits, paid = cost_per_1k_tokens as flat credit
+      const creditCost = parseFloat(model?.cost_per_1k_tokens || 0) > 0
+        ? parseFloat(model.cost_per_1k_tokens) * (result.duration_seconds || 5)
+        : 0;
+
+      if (creditCost > 0) await deductCredits(generation.user_id, generationId, creditCost);
+
+      await query(
+        `UPDATE ai_generations
+         SET status        = 'completed',
+             result_url    = $1,
+             credits_used  = $2,
+             duration_ms   = $3,
+             completed_at  = NOW(),
+             result_metadata = $4
+         WHERE id = $5`,
+        [
+          storedUrl,
+          creditCost,
+          result.duration_ms,
+          JSON.stringify({
+            duration_seconds:  result.duration_seconds,
+            generation_job_id: result.generation_job_id,
+            original_url:      result.url,
+          }),
+          generationId,
+        ]
       );
 
     } else {

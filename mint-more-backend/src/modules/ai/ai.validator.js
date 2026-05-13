@@ -1,6 +1,6 @@
 const AppError = require('../../utils/AppError');
 
-const TOOL_TYPES = ['text', 'image', 'video_script', 'caption', 'repurpose'];
+const TOOL_TYPES = ['text', 'image', 'video', 'video_script', 'caption', 'repurpose'];
 
 const validateGenerateRequest = (body) => {
   const { tool_type, model_id, prompt } = body;

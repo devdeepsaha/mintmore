@@ -122,4 +122,125 @@ const fetchOpenRouterModels = async () => {
   }
 };
 
-module.exports = { generateText, generateImage, fetchOpenRouterModels };
+/**
+ * Generate video via OpenRouter video generation endpoint.
+ *
+ * OpenRouter video generation API:
+ * POST /v1/video/generations
+ *
+ * Supports:
+ * - text-to-video: just a prompt
+ * - image-to-video: prompt + first_frame_image (base64 or URL)
+ *
+ * Returns a generation ID -> we poll for completion.
+ *
+ * @param {string} openrouterId   - OpenRouter video model string
+ * @param {string} prompt         - text description of the video
+ * @param {object} params         - duration, aspect_ratio, first_frame_url, etc.
+ * @returns {{ url, duration_ms, duration_seconds }}
+ */
+const generateVideo = async (openrouterId, prompt, params = {}) => {
+  const startTime = Date.now();
+
+  const {
+    duration        = 5,      // seconds (4-10 depending on model)
+    aspect_ratio    = '16:9', // '16:9' | '9:16' | '1:1'
+    first_frame_url = null,   // image-to-video: URL of first frame
+    last_frame_url  = null,   // some models support last frame too
+    resolution      = '720p', // '720p' | '1080p'
+  } = params;
+
+  // Build request body
+  const body = {
+    model:  openrouterId,
+    prompt,
+    duration,
+    aspect_ratio,
+    resolution,
+  };
+
+  if (first_frame_url) body.first_frame_image = first_frame_url;
+  if (last_frame_url)  body.last_frame_image  = last_frame_url;
+
+  // Step 1 - Submit generation request
+  const submitRes = await fetch(`${OPENROUTER_BASE}/video/generations`, {
+    method:  'POST',
+    headers: {
+      Authorization:  `Bearer ${env.ai.openrouterKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://mintmoremarketing.com',
+      'X-Title':      'Mint More AI',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const submitData = await submitRes.json();
+
+  if (!submitRes.ok) {
+    const errorMsg = submitData.error?.message || `OpenRouter video error: ${submitRes.status}`;
+    logger.error('OpenRouter video submit error', { openrouterId, error: errorMsg });
+    throw new Error(errorMsg);
+  }
+
+  const generationJobId = submitData.id;
+  if (!generationJobId) throw new Error('OpenRouter returned no video generation ID');
+
+  logger.info('Video generation submitted', { openrouterId, generationJobId });
+
+  // Step 2 - Poll for completion (max 10 minutes for video)
+  const maxWaitMs   = 10 * 60 * 1000;
+  const pollEveryMs = 5000;
+  const deadline    = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollEveryMs));
+
+    const pollRes = await fetch(
+      `${OPENROUTER_BASE}/video/generations/${generationJobId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${env.ai.openrouterKey}`,
+        },
+      }
+    );
+
+    const pollData = await pollRes.json();
+
+    if (pollData.status === 'completed' || pollData.status === 'succeeded') {
+      const videoUrl = pollData.url || pollData.video_url || pollData.output?.[0];
+      if (!videoUrl) throw new Error('Video generation completed but no URL returned');
+
+      const duration_ms = Date.now() - startTime;
+      logger.info('Video generation completed', {
+        openrouterId, generationJobId, duration_ms,
+      });
+
+      return {
+        url:              videoUrl,
+        duration_ms,
+        duration_seconds: duration,
+        generation_job_id: generationJobId,
+      };
+    }
+
+    if (pollData.status === 'failed' || pollData.status === 'error') {
+      const msg = pollData.error?.message || pollData.message || 'Video generation failed';
+      throw new Error(msg);
+    }
+
+    logger.debug('Video generation still processing', {
+      generationJobId,
+      status: pollData.status,
+      elapsed_ms: Date.now() - startTime,
+    });
+  }
+
+  throw new Error('Video generation timed out after 10 minutes');
+};
+
+module.exports = {
+  generateText,
+  generateImage,
+  generateVideo,
+  fetchOpenRouterModels,
+};
