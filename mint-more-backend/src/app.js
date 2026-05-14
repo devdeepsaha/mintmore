@@ -8,8 +8,6 @@ const requestLogger = require('./middleware/requestLogger');
 const { globalRateLimiter } = require('./middleware/rateLimiter');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const { initSSESubscriber } = require('./middleware/sse');
-const { startPublishWorker } = require('./modules/social/queue/publish.worker');
-const { startAIWorker }  = require('./modules/ai/queue/ai.worker');
 
 const healthRouter       = require('./modules/health/health.routes');
 const authRouter         = require('./modules/auth/auth.routes');
@@ -28,11 +26,15 @@ const chatRouter         = require('./modules/chat/chat.routes');
 const whatsappRouter     = require('./modules/whatsapp/webhook.routes');
 const socialRouter       = require('./modules/social/social.routes');
 const aiRouter           = require('./modules/ai/ai.routes');
+const addonRouter        = require('./modules/addons/addon.routes');
+const freelancerRouter   = require('./modules/freelancers/freelancer.routes');
+const packageRouter      = require('./modules/packages/package.routes');
+const portfolioRouter    = require('./modules/portfolio/portfolio.routes');
+const reviewRouter       = require('./modules/reviews/review.routes');
+const inquiryRouter      = require('./modules/inquiries/inquiry.routes');
 
-// Initialise background services
+// Initialise SSE subscriber (does not require main Redis client)
 initSSESubscriber();
-startPublishWorker();
-startAIWorker();
 
 const app = express();
 
@@ -77,6 +79,12 @@ app.use(`/api/${env.apiVersion}/wallet`,        walletRouter);
 app.use(`/api/${env.apiVersion}/chat`,          chatRouter);
 app.use(`/api/${env.apiVersion}/social`,        socialRouter);
 app.use(`/api/${env.apiVersion}/ai`,            aiRouter);
+app.use(`/api/${env.apiVersion}/addons`,        addonRouter);
+app.use(`/api/${env.apiVersion}/freelancers`,   freelancerRouter);
+app.use(`/api/${env.apiVersion}/packages`,      packageRouter);
+app.use(`/api/${env.apiVersion}/portfolio`,     portfolioRouter);
+app.use(`/api/${env.apiVersion}/reviews`,       reviewRouter);
+app.use(`/api/${env.apiVersion}/inquiries`,     inquiryRouter);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -12,7 +12,7 @@ router.use(authenticate);
 router.get('/models', controller.getModels);
 
 // GET  /api/v1/ai/models/:modelId/traffic        — single model live traffic
-router.get('/models/:modelId/traffic', controller.getModelTrafficHandler);
+router.get('/models/:modelId/traffic', controller.getSingleModelTraffic);
 
 // ── Generation ────────────────────────────────────────────────────────────────
 

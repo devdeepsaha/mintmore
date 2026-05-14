@@ -7,7 +7,7 @@ let redisClient = null;
 const connectRedis = () => {
   return new Promise((resolve, reject) => {
     const client = new Redis(env.redis.url, {
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: null,
       enableReadyCheck: true,
       // Exponential back-off on reconnect
       retryStrategy: (times) => {
